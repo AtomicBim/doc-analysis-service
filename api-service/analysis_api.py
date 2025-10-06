@@ -551,7 +551,21 @@ async def _call_openrouter_api(messages: List[Dict]) -> str:
             temperature=TEMPERATURE,
             extra_body={"plugins": plugins}  # OpenRouter принимает plugins через extra_body
         )
-        return response.choices[0].message.content
+
+        # Логирование полного ответа для диагностики
+        logger.info(f"OpenRouter response: {response}")
+
+        # Проверка наличия choices
+        if not response.choices:
+            logger.error(f"OpenRouter вернул пустой choices. Полный ответ: {response.model_dump()}")
+            raise ValueError("OpenRouter вернул пустой ответ (choices is None or empty)")
+
+        content = response.choices[0].message.content
+        if not content:
+            logger.error(f"OpenRouter вернул пустой content. Полный ответ: {response.model_dump()}")
+            raise ValueError("OpenRouter вернул пустой content")
+
+        return content
     except Exception as e:
         logger.error(f"Ошибка при вызове OpenRouter API: {e}", exc_info=True)
         raise
