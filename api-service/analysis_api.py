@@ -365,10 +365,7 @@ def _build_text_prompt(stage: str, req_type: str, texts: Dict[str, str]) -> str:
 
     requirements_info = ""
     if "tu_document" in texts:
-        requirements_info = f"
-
-ТЕХНИЧЕСКИЕ УСЛОВИЯ:
-{texts['tu_document']}"
+        requirements_info = f"\n\nТЕХНИЧЕСКИЕ УСЛОВИЯ:\n{texts['tu_document']}"
 
     prompt = f"""
 {stage_prompt}
