@@ -8,6 +8,7 @@ import json
 import logging
 import asyncio
 import tempfile
+import base64
 from typing import List, Optional, Dict, Any
 
 import uvicorn
@@ -31,22 +32,22 @@ load_dotenv()
 # Выбор AI провайдера
 AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").lower()
 
-# Инициализация Gemini API (требуется всегда)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    logger.error("GEMINI_API_KEY не установлен! Он необходим для работы обоих провайдеров (gemini и openrouter).")
-    raise ValueError("GEMINI_API_KEY is required")
-genai.configure(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-logger.info(f"Используется Google Gemini: {GEMINI_MODEL}")
+# Инициализация Gemini API
+if AI_PROVIDER == "gemini":
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        logger.error("GEMINI_API_KEY не установлен в переменных окружения!")
+        raise ValueError("GEMINI_API_KEY is required for Gemini provider")
+    genai.configure(api_key=GEMINI_API_KEY)
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    logger.info(f"Используется Google Gemini: {GEMINI_MODEL}")
 
-
-# Инициализация OpenRouter API (если выбран)
-if AI_PROVIDER == "openrouter":
+# Инициализация OpenRouter API
+elif AI_PROVIDER == "openrouter":
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
     if not OPENROUTER_API_KEY:
         logger.error("OPENROUTER_API_KEY не установлен в переменных окружения!")
-        raise ValueError("OPENROUTER_API_KEY is required")
+        raise ValueError("OPENROUTER_API_KEY is required for OpenRouter provider")
 
     openrouter_client = AsyncOpenAI(
         base_url="https://openrouter.ai/api/v1",
@@ -54,8 +55,9 @@ if AI_PROVIDER == "openrouter":
     )
     OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-1.5-flash")
     logger.info(f"Используется OpenRouter: {OPENROUTER_MODEL}")
-elif AI_PROVIDER not in ["gemini"]:
-     raise ValueError(f"Неизвестный AI_PROVIDER: {AI_PROVIDER}. Используйте 'gemini' или 'openrouter'")
+
+else:
+    raise ValueError(f"Неизвестный AI_PROVIDER: {AI_PROVIDER}. Используйте 'gemini' или 'openrouter'")
 
 # Общие настройки
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
@@ -235,19 +237,18 @@ async def analyze_documentation(
             # Нативная обработка файлов в Gemini
             logger.info("Загрузка файлов в Gemini File API...")
             uploaded_files = await _upload_files_to_gemini_api([tz_document, doc_document, tu_document])
-            
+
             prompt = _build_multimodal_prompt(stage, req_type, uploaded_files)
             logger.info("Отправка запроса в Google Gemini API с файлами...")
             analysis_result_text = await _call_gemini_api(prompt)
 
         elif AI_PROVIDER == "openrouter":
-            # Шаг 1: Извлечение текста с помощью Gemini
-            logger.info("Шаг 1/2: Извлечение текста из файлов с помощью Gemini API...")
-            extracted_texts = await _extract_text_with_gemini([tz_document, doc_document, tu_document])
-            
-            # Шаг 2: Анализ текста с помощью OpenRouter
-            logger.info("Шаг 2/2: Отправка извлеченного текста в OpenRouter...")
-            prompt = _build_text_prompt(stage, req_type, extracted_texts)
+            # Мультимодальная обработка через OpenRouter (аналогично Gemini)
+            logger.info("Подготовка файлов для отправки в OpenRouter...")
+            files_data = await _prepare_files_for_openrouter([tz_document, doc_document, tu_document])
+
+            logger.info("Отправка мультимодального запроса в OpenRouter...")
+            prompt = _build_openrouter_multimodal_prompt(stage, req_type, files_data)
             analysis_result_text = await _call_openrouter_api(prompt)
 
         # Парсинг результата
@@ -312,6 +313,39 @@ async def _upload_files_to_gemini_api(files: List[Optional[UploadFile]]) -> Dict
     return result_dict
 
 
+async def _prepare_files_for_openrouter(files: List[Optional[UploadFile]]) -> Dict[str, str]:
+    """
+    Подготавливает файлы для отправки в OpenRouter через base64 encoding.
+    OpenRouter (через OpenAI API) поддерживает PDF через data URI.
+    """
+    files_data = {}
+    file_keys = ["tz_document", "doc_document", "tu_document"]
+
+    for i, file in enumerate(files):
+        if file is None:
+            continue
+
+        key = file_keys[i]
+        logger.info(f"Кодирование {file.filename} в base64...")
+
+        file_bytes = await file.read()
+        base64_data = base64.b64encode(file_bytes).decode('utf-8')
+
+        # Определяем MIME type
+        file_ext = file.filename.lower().split('.')[-1]
+        mime_type = "application/pdf" if file_ext == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        # Формируем data URI для OpenRouter
+        files_data[key] = {
+            "filename": file.filename,
+            "data_uri": f"data:{mime_type};base64,{base64_data}"
+        }
+
+        logger.info(f"Файл {file.filename} подготовлен (размер: {len(base64_data)} символов base64)")
+
+    return files_data
+
+
 async def _extract_text_with_gemini(files: List[Optional[UploadFile]]) -> Dict[str, str]:
     """Извлекает текст из файлов, используя Gemini API."""
     uploaded_files = await _upload_files_to_gemini_api(files)
@@ -370,6 +404,69 @@ def _build_multimodal_prompt(stage: str, req_type: str, files: Dict[str, Any]) -
     return prompt_parts
 
 
+def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: Dict[str, Dict]) -> List[Dict]:
+    """
+    Формирование мультимодального промпта для OpenRouter API.
+    Использует формат OpenAI vision API с PDF как images.
+    """
+    stage_prompt = PROMPTS.get(stage, PROMPTS["ФЭ"])
+
+    # Системное сообщение с инструкциями
+    task_description = f"""
+{stage_prompt}
+
+ЗАДАЧА:
+Проанализируй соответствие проектной документации требованиям технического задания{' и технических условий' if 'tu_document' in files_data else ''}.
+
+Верни результат в формате JSON со следующей структурой:
+{{
+  "requirements": [
+    {{
+      "number": 1,
+      "requirement": "Текст требования из ТЗ",
+      "status": "Исполнено|Частично исполнено|Не исполнено|Требует уточнения",
+      "confidence": 95,
+      "solution_description": "Описание найденного решения",
+      "reference": "Документ, страница/лист",
+      "discrepancies": "Выявленные несоответствия",
+      "recommendations": "Рекомендации по доработке"
+    }}
+  ],
+  "summary": "Общая сводка по результатам анализа"
+}}
+
+ВАЖНО: Верни ТОЛЬКО валидный JSON, без дополнительного текста.
+
+ДОКУМЕНТЫ ДЛЯ АНАЛИЗА:
+"""
+
+    # Формируем content с PDF как image_url
+    content_parts = [{"type": "text", "text": task_description}]
+
+    if "tz_document" in files_data:
+        content_parts.append({"type": "text", "text": f"\n\nТЕХНИЧЕСКОЕ ЗАДАНИЕ ({files_data['tz_document']['filename']}):"})
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {"url": files_data["tz_document"]["data_uri"]}
+        })
+
+    if "doc_document" in files_data:
+        content_parts.append({"type": "text", "text": f"\n\nПРОЕКТНАЯ ДОКУМЕНТАЦИЯ ({files_data['doc_document']['filename']}):"})
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {"url": files_data["doc_document"]["data_uri"]}
+        })
+
+    if "tu_document" in files_data:
+        content_parts.append({"type": "text", "text": f"\n\nТЕХНИЧЕСКИЕ УСЛОВИЯ ({files_data['tu_document']['filename']}):"})
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {"url": files_data["tu_document"]["data_uri"]}
+        })
+
+    return [{"role": "user", "content": content_parts}]
+
+
 def _build_text_prompt(stage: str, req_type: str, texts: Dict[str, str]) -> str:
     """Формирование текстового промпта для OpenRouter."""
     stage_prompt = PROMPTS.get(stage, PROMPTS["ФЭ"])
@@ -426,12 +523,12 @@ async def _call_gemini_api(prompt: List[Any]) -> str:
         logger.error(f"Ошибка при вызове Gemini API: {e}", exc_info=True)
         raise
 
-async def _call_openrouter_api(prompt: str) -> str:
-    """Вызов OpenRouter API с текстовым промптом."""
+async def _call_openrouter_api(messages: List[Dict]) -> str:
+    """Вызов OpenRouter API с мультимодальными сообщениями."""
     try:
         response = await openrouter_client.chat.completions.create(
             model=OPENROUTER_MODEL,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             temperature=TEMPERATURE,
         )
         return response.choices[0].message.content
