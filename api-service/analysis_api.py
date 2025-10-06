@@ -321,23 +321,17 @@ async def _extract_text_with_gemini(files: List[Optional[UploadFile]]) -> Dict[s
 def _build_multimodal_prompt(stage: str, req_type: str, files: Dict[str, Any]) -> List[Any]:
     """Формирование мультимодального промпта для Gemini API с ссылками на файлы."""
     stage_prompt = PROMPTS.get(stage, PROMPTS["ФЭ"])
-    
+
     prompt_parts = [
         stage_prompt,
-        "
-
-ТЕХНИЧЕСКОЕ ЗАДАНИЕ:",
+        "\n\nТЕХНИЧЕСКОЕ ЗАДАНИЕ:",
         files["tz_document"],
-        "
-
-ПРОЕКТНАЯ ДОКУМЕНТАЦИЯ:",
+        "\n\nПРОЕКТНАЯ ДОКУМЕНТАЦИЯ:",
         files["doc_document"],
     ]
 
     if "tu_document" in files:
-        prompt_parts.extend(["
-
-ТЕХНИЧЕСКИЕ УСЛОВИЯ:", files["tu_document"]])
+        prompt_parts.extend(["\n\nТЕХНИЧЕСКИЕ УСЛОВИЯ:", files["tu_document"]])
 
     prompt_parts.append(f"""
 ЗАДАЧА:
