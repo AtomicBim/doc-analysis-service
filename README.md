@@ -70,23 +70,28 @@
 
 ## 📁 Структура проекта
 
+> ⚠️ **Важное замечание:** Проект был переведен с монолитной архитектуры на микросервисную. Файлы `doc_analysis_app.py`, `Dockerfile` и `requirements.txt` в корневом каталоге являются частью старой версии и **не используются** в текущей конфигурации `docker-compose.yml`. Они сохранены для истории.
+
 ```
 doc-analysis-service/
-├── api-service/                  # API-сервис с Gemini
-│   ├── analysis_api.py          # FastAPI приложение
-│   ├── requirements.txt         # Зависимости API
-│   ├── Dockerfile              # Docker для API
-│   └── .env.example            # Пример переменных окружения
+├── api-service/                  # ✅ Актуальный API-сервис (FastAPI + Gemini)
+│   ├── analysis_api.py
+│   ├── requirements.txt
+│   ├── Dockerfile
+│   └── .env.example
 │
-├── ui-service/                   # Gradio UI
-│   ├── gradio_ui.py            # Gradio приложение
-│   ├── requirements.txt        # Зависимости UI
-│   └── Dockerfile              # Docker для UI
+├── ui-service/                   # ✅ Актуальный UI-сервис (Gradio)
+│   ├── gradio_ui.py
+│   ├── requirements.txt
+│   └── Dockerfile
 │
-├── docker-compose.yml           # Оркестрация сервисов
-├── .env.example                # Общий пример .env
-├── .gitignore                  # Исключения Git
-└── README.md                   # Документация
+├── docker-compose.yml           # ✅ Оркестратор микросервисов
+├── doc_analysis_app.py          # ❌ Устаревший монолит (не используется)
+├── Dockerfile                   # ❌ Устаревший Dockerfile для монолита
+├── requirements.txt             # ❌ Устаревшие зависимости для монолита
+├── .env.example
+├── .gitignore
+└── README.md
 ```
 
 ## 🚀 Быстрый старт
