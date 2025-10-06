@@ -316,7 +316,7 @@ async def _upload_files_to_gemini_api(files: List[Optional[UploadFile]]) -> Dict
 async def _prepare_files_for_openrouter(files: List[Optional[UploadFile]]) -> Dict[str, Dict]:
     """
     Подготавливает файлы для отправки в OpenRouter через base64 encoding.
-    OpenRouter поддерживает PDF через формат file_data с base64.
+    OpenRouter поддерживает PDF через формат file_data с чистым base64 (без data URI префикса).
     """
     files_data = {}
     file_keys = ["tz_document", "doc_document", "tu_document"]
@@ -335,10 +335,11 @@ async def _prepare_files_for_openrouter(files: List[Optional[UploadFile]]) -> Di
         file_ext = file.filename.lower().split('.')[-1]
         mime_type = "application/pdf" if file_ext == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-        # Формируем структуру для OpenRouter
+        # Формируем структуру для OpenRouter (только чистый base64, без data URI префикса!)
         files_data[key] = {
             "filename": file.filename,
-            "file_data": f"data:{mime_type};base64,{base64_data}"
+            "file_data": base64_data,  # Только base64, без префикса
+            "mime_type": mime_type
         }
 
         logger.info(f"Файл {file.filename} подготовлен (размер: {len(base64_data)} символов base64)")
@@ -449,7 +450,8 @@ def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: D
             "type": "file",
             "file": {
                 "filename": files_data["tz_document"]["filename"],
-                "file_data": files_data["tz_document"]["file_data"]
+                "file_data": files_data["tz_document"]["file_data"],
+                "mime_type": files_data["tz_document"]["mime_type"]
             }
         })
 
@@ -459,7 +461,8 @@ def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: D
             "type": "file",
             "file": {
                 "filename": files_data["doc_document"]["filename"],
-                "file_data": files_data["doc_document"]["file_data"]
+                "file_data": files_data["doc_document"]["file_data"],
+                "mime_type": files_data["doc_document"]["mime_type"]
             }
         })
 
@@ -469,7 +472,8 @@ def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: D
             "type": "file",
             "file": {
                 "filename": files_data["tu_document"]["filename"],
-                "file_data": files_data["tu_document"]["file_data"]
+                "file_data": files_data["tu_document"]["file_data"],
+                "mime_type": files_data["tu_document"]["mime_type"]
             }
         })
 
