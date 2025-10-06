@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)"
     ],
     "deny": [],
     "ask": []

@@ -20,7 +20,7 @@
 │  ┌────────────────────┐          HTTP           ┌──────────────┐ │
 │  │   Gradio UI        │ ─────────────────────► │  API Service │ │
 │  │  (БЕЗ прокси)      │                        │  (С прокси)  │ │
-│  │  Port: 7861        │ ◄───────────────────── │  Port: 8000  │ │
+│  │  Port: 7861        │ ◄───────────────────── │  Port: 8001  │ │
 │  └────────────────────┘       JSON              └──────┬───────┘ │
 │                                                         │          │
 └─────────────────────────────────────────────────────────┼─────────┘
@@ -50,7 +50,7 @@
 
 - **Назначение**: Обработка запросов через Google Gemini API
 - **Сеть**: Через VPN/SOCKS5 прокси
-- **Порт**: 8000
+- **Порт**: 8001
 - **Функции**:
   - Прием запросов от UI
   - Формирование промптов для Gemini
@@ -143,7 +143,7 @@ docker-compose logs -f doc-analysis-ui
 
 Откройте в браузере:
 - **Gradio UI:** http://localhost:7861
-- **API Docs:** http://localhost:8000/docs
+- **API Docs:** http://localhost:8001/docs
 
 ## 📋 Использование
 
@@ -336,7 +336,7 @@ docker-compose restart doc-analysis-api
 **Решение:**
 ```bash
 # Проверьте, что API запущен
-curl http://localhost:8000/
+curl http://localhost:8001/
 
 # Проверьте переменную окружения в UI
 docker-compose exec doc-analysis-ui env | grep API_SERVICE_URL
@@ -434,7 +434,7 @@ upstream api_backend {
 ### Тест API напрямую
 
 ```bash
-curl -X POST http://localhost:8000/analyze \
+curl -X POST http://localhost:8001/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "stage": "ФЭ",
@@ -471,6 +471,7 @@ print(response.text)
 - `uvicorn` - ASGI сервер
 - `google-generativeai` - Google Gemini API
 - `pydantic` - валидация данных
+- `python-dotenv` - переменные окружения
 - `httpx[socks]` - HTTP клиент с поддержкой SOCKS
 
 ### UI-сервис (`ui-service/requirements.txt`)

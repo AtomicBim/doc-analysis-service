@@ -7,7 +7,7 @@ services:
     container_name: doc_analysis_api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       # ✅ VPN прокси для доступа к Google Gemini API
       - HTTPS_PROXY=socks5://172.17.0.1:10808

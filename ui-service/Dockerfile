@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY gradio_ui.py .
 
 # Порт для Gradio
-EXPOSE 7860
+EXPOSE 7861
 
 # Запуск Gradio UI
 CMD ["python", "gradio_ui.py"]
