@@ -1,5 +1,5 @@
 """
-FastAPI сервис для анализа документации с использованием Google Gemini API
+FastAPI сервис для анализа документации с использованием Google Gemini API или OpenRouter
 Работает через VPN/SOCKS прокси
 """
 import os
@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import google.generativeai as genai
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 
@@ -26,16 +27,48 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
+# Выбор AI провайдера
+AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").lower()
+
 # Инициализация Gemini API
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    logger.error("GEMINI_API_KEY не установлен в переменных окружения!")
-    raise ValueError("GEMINI_API_KEY is required")
+if AI_PROVIDER == "gemini":
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        logger.error("GEMINI_API_KEY не установлен в переменных окружения!")
+        raise ValueError("GEMINI_API_KEY is required")
+    genai.configure(api_key=GEMINI_API_KEY)
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+    logger.info(f"Используется Google Gemini: {GEMINI_MODEL}")
 
-genai.configure(api_key=GEMINI_API_KEY)
+# Инициализация OpenRouter API
+elif AI_PROVIDER == "openrouter":
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    if not OPENROUTER_API_KEY:
+        logger.error("OPENROUTER_API_KEY не установлен в переменных окружения!")
+        raise ValueError("OPENROUTER_API_KEY is required")
 
-# Настройки модели
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    openrouter_client = AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_API_KEY,
+    )
+    OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+    logger.info(f"Используется OpenRouter: {OPENROUTER_MODEL}")
+
+# Инициализация OpenAI API
+elif AI_PROVIDER == "openai":
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        logger.error("OPENAI_API_KEY не установлен в переменных окружения!")
+        raise ValueError("OPENAI_API_KEY is required")
+
+    openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    logger.info(f"Используется OpenAI: {OPENAI_MODEL}")
+
+else:
+    raise ValueError(f"Неизвестный AI_PROVIDER: {AI_PROVIDER}. Используйте 'gemini', 'openrouter' или 'openai'")
+
+# Общие настройки
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
 
 
@@ -205,10 +238,18 @@ app.add_middleware(
 @app.get("/")
 async def root():
     """Health check"""
+    if AI_PROVIDER == "gemini":
+        model_info = GEMINI_MODEL
+    elif AI_PROVIDER == "openrouter":
+        model_info = OPENROUTER_MODEL
+    else:
+        model_info = OPENAI_MODEL
+
     return {
         "status": "ok",
         "service": "Document Analysis API",
-        "model": GEMINI_MODEL
+        "provider": AI_PROVIDER,
+        "model": model_info
     }
 
 
@@ -297,19 +338,40 @@ def _build_gemini_prompt(request: AnalysisRequest, stage_prompt: str) -> str:
 
 
 async def _call_gemini_api(prompt: str) -> str:
-    """Вызов Google Gemini API"""
+    """Вызов AI API (Gemini, OpenRouter или OpenAI)"""
     try:
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = await model.generate_content_async(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=TEMPERATURE
+        if AI_PROVIDER == "gemini":
+            model = genai.GenerativeModel(GEMINI_MODEL)
+            response = await model.generate_content_async(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=TEMPERATURE
+                )
             )
-        )
-        return response.text
+            return response.text
+
+        elif AI_PROVIDER == "openrouter":
+            response = await openrouter_client.chat.completions.create(
+                model=OPENROUTER_MODEL,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=TEMPERATURE,
+            )
+            return response.choices[0].message.content
+
+        elif AI_PROVIDER == "openai":
+            response = await openai_client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=TEMPERATURE,
+            )
+            return response.choices[0].message.content
 
     except Exception as e:
-        logger.error(f"Ошибка при вызове Gemini API: {e}")
+        logger.error(f"Ошибка при вызове {AI_PROVIDER.upper()} API: {e}")
         raise
 
 
