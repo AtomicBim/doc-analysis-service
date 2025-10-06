@@ -218,16 +218,9 @@ async def analyze_documentation(
                     detail=f"Файл {file.filename} слишком большой ({file_size / 1024 / 1024:.2f} MB). Максимальный размер: {MAX_FILE_SIZE_MB} MB"
                 )
 
-        # Создаём vector store для файлов
-        logger.info("Создание vector store для документов...")
-        vector_store = await client.beta.vector_stores.create(
-            name=f"Analysis_{stage}_{req_type}"
-        )
-
-        # Загружаем файлы в vector store
+        # Загружаем файлы в OpenAI
         logger.info("Загрузка файлов в OpenAI...")
-        file_ids = await _upload_files_to_vector_store(
-            vector_store.id,
+        file_ids = await _upload_files_to_openai(
             [tz_document, doc_document, tu_document]
         )
 
@@ -237,15 +230,14 @@ async def analyze_documentation(
             name="Document Analyzer",
             instructions="Ты эксперт по анализу строительной документации и чертежей. Анализируй PDF документы внимательно, обращая особое внимание на графические элементы чертежей.",
             model=OPENAI_MODEL,
-            tools=[{"type": "file_search"}],
-            tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}},
-            temperature=TEMPERATURE
+            tools=[{"type": "file_search"}]
         )
 
         # Создаём thread и отправляем запрос
         logger.info("Отправка запроса на анализ...")
         analysis_result_text = await _run_analysis_with_assistant(
             assistant.id,
+            file_ids,
             stage,
             req_type,
             tu_document is not None
@@ -257,7 +249,7 @@ async def analyze_documentation(
 
         # Очистка ресурсов
         logger.info("Очистка ресурсов...")
-        await _cleanup_resources(assistant.id, vector_store.id)
+        await _cleanup_resources(assistant.id, file_ids)
 
         logger.info("Анализ завершен успешно")
         return parsed_result
@@ -279,11 +271,10 @@ async def _get_file_size(file: UploadFile) -> int:
     return len(content)
 
 
-async def _upload_files_to_vector_store(
-    vector_store_id: str,
+async def _upload_files_to_openai(
     files: List[Optional[UploadFile]]
 ) -> List[str]:
-    """Загружает файлы в vector store."""
+    """Загружает файлы в OpenAI."""
     file_ids = []
 
     for file in files:
@@ -300,12 +291,6 @@ async def _upload_files_to_vector_store(
         )
         file_ids.append(uploaded_file.id)
 
-        # Добавляем файл в vector store
-        await client.beta.vector_stores.files.create(
-            vector_store_id=vector_store_id,
-            file_id=uploaded_file.id
-        )
-
         logger.info(f"Файл {file.filename} загружен (ID: {uploaded_file.id})")
 
     return file_ids
@@ -313,6 +298,7 @@ async def _upload_files_to_vector_store(
 
 async def _run_analysis_with_assistant(
     assistant_id: str,
+    file_ids: List[str],
     stage: str,
     req_type: str,
     has_tu: bool
@@ -353,11 +339,12 @@ async def _run_analysis_with_assistant(
     # Создаём thread
     thread = await client.beta.threads.create()
 
-    # Добавляем сообщение
+    # Добавляем сообщение с прикрепленными файлами
     await client.beta.threads.messages.create(
         thread_id=thread.id,
         role="user",
-        content=prompt
+        content=prompt,
+        attachments=[{"file_id": fid, "tools": [{"type": "file_search"}]} for fid in file_ids]
     )
 
     # Запускаем run
@@ -390,11 +377,19 @@ async def _run_analysis_with_assistant(
     return response_text
 
 
-async def _cleanup_resources(assistant_id: str, vector_store_id: str):
+async def _cleanup_resources(assistant_id: str, file_ids: List[str]):
     """Удаляет созданные ресурсы."""
     try:
+        # Удаляем ассистента
         await client.beta.assistants.delete(assistant_id)
-        await client.beta.vector_stores.delete(vector_store_id)
+
+        # Удаляем файлы
+        for file_id in file_ids:
+            try:
+                await client.files.delete(file_id)
+            except Exception as e:
+                logger.warning(f"Не удалось удалить файл {file_id}: {e}")
+
         logger.info("Ресурсы успешно очищены")
     except Exception as e:
         logger.warning(f"Ошибка при очистке ресурсов: {e}")

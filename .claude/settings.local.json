@@ -6,7 +6,8 @@
       "Bash(findstr:*)",
       "Bash(python:*)",
       "WebSearch",
-      "WebFetch(domain:openrouter.ai)"
+      "WebFetch(domain:openrouter.ai)",
+      "Bash(docker exec:*)"
     ],
     "deny": [],
     "ask": []
