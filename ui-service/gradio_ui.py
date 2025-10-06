@@ -113,7 +113,9 @@ def validate_all_inputs(
     if tz_file is None:
         return False, json.dumps({"error": "Не загружен файл технического задания"}, ensure_ascii=False)
 
-    valid, error = validate_file_by_name(tz_file.name, "technical_assignment")
+    # В Gradio 3.x type="file" возвращает строку (путь к файлу)
+    tz_filename = tz_file if isinstance(tz_file, str) else tz_file.name
+    valid, error = validate_file_by_name(tz_filename, "technical_assignment")
     if not valid:
         return False, json.dumps({"error": f"Техническое задание: {error}"}, ensure_ascii=False)
 
@@ -121,7 +123,8 @@ def validate_all_inputs(
     if doc_file is None:
         return False, json.dumps({"error": "Не загружен файл документации"}, ensure_ascii=False)
 
-    valid, error = validate_file_by_name(doc_file.name, "documentation")
+    doc_filename = doc_file if isinstance(doc_file, str) else doc_file.name
+    valid, error = validate_file_by_name(doc_filename, "documentation")
     if not valid:
         return False, json.dumps({"error": f"Документация: {error}"}, ensure_ascii=False)
 
@@ -130,7 +133,8 @@ def validate_all_inputs(
         if tu_file is None:
             return False, json.dumps({"error": f"Для типа требований '{REQUIREMENT_TYPES[req_type]}' необходимо загрузить файл технических условий"}, ensure_ascii=False)
 
-        valid, error = validate_file_by_name(tu_file.name, "technical_requirements")
+        tu_filename = tu_file if isinstance(tu_file, str) else tu_file.name
+        valid, error = validate_file_by_name(tu_filename, "technical_requirements")
         if not valid:
             return False, json.dumps({"error": f"Технические условия: {error}"}, ensure_ascii=False)
 
@@ -339,12 +343,17 @@ def process_documentation_analysis(
 
     # Вызов API для анализа
     print(f"📡 Обращение к API-сервису: {API_SERVICE_URL}")
+    # В Gradio 3.x type="file" возвращает строку (путь к файлу)
+    tz_path = tz_file if isinstance(tz_file, str) else tz_file.name
+    doc_path = doc_file if isinstance(doc_file, str) else doc_file.name
+    tu_path = (tu_file if isinstance(tu_file, str) else tu_file.name) if tu_file else None
+
     api_response = call_analysis_api(
         stage=stage,
         req_type=req_type,
-        tz_file_path=tz_file.name,
-        doc_file_path=doc_file.name,
-        tu_file_path=tu_file.name if tu_file else None
+        tz_file_path=tz_path,
+        doc_file_path=doc_path,
+        tu_file_path=tu_path
     )
 
     # Форматирование результатов
@@ -385,21 +394,21 @@ def create_interface():
                 tz_file = gr.File(
                     label="Техническое задание (ТЗ)",
                     file_types=[".docx", ".pdf"],
-                    type="filepath"
+                    type="file"
                 )
                 gr.Markdown("*Принимаются файлы: .docx, .pdf*")
 
                 doc_file = gr.File(
                     label="Проектная документация",
                     file_types=[".docx", ".pdf"],
-                    type="filepath"
+                    type="file"
                 )
                 gr.Markdown("*Принимаются файлы: .docx, .pdf*")
 
                 tu_file = gr.File(
                     label="Технические условия (ТУ)",
                     file_types=[".docx", ".pdf"],
-                    type="filepath",
+                    type="file",
                     visible=False
                 )
                 gr.Markdown("*Загружается для стадий РД и ПД*")
