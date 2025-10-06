@@ -48,7 +48,6 @@ STAGES = {
 
 # Типы требований
 REQUIREMENT_TYPES = {
-    "ТЗ": "ТЗ на проектирование (общие требования)",
     "ТУ_РД": "ТУ на проектирование для РД",
     "ТУ_ПД": "ТУ на проектирование для ПД",
     "ТУ_ФЭ": "ТУ на проектирование для ФЭ",
@@ -115,18 +114,20 @@ def validate_all_inputs(
 
     # В Gradio 3.x type="file" возвращает строку (путь к файлу)
     tz_filename = tz_file if isinstance(tz_file, str) else tz_file.name
-    valid, error = validate_file_by_name(tz_filename, "technical_assignment")
-    if not valid:
-        return False, json.dumps({"error": f"Техническое задание: {error}"}, ensure_ascii=False)
+    # Проверка имени файла закомментирована
+    # valid, error = validate_file_by_name(tz_filename, "technical_assignment")
+    # if not valid:
+    #     return False, json.dumps({"error": f"Техническое задание: {error}"}, ensure_ascii=False)
 
     # Валидация документации
     if doc_file is None:
         return False, json.dumps({"error": "Не загружен файл документации"}, ensure_ascii=False)
 
     doc_filename = doc_file if isinstance(doc_file, str) else doc_file.name
-    valid, error = validate_file_by_name(doc_filename, "documentation")
-    if not valid:
-        return False, json.dumps({"error": f"Документация: {error}"}, ensure_ascii=False)
+    # Проверка имени файла закомментирована
+    # valid, error = validate_file_by_name(doc_filename, "documentation")
+    # if not valid:
+    #     return False, json.dumps({"error": f"Документация: {error}"}, ensure_ascii=False)
 
     # Валидация ТУ для РД и ПД
     if req_type in ["ТУ_РД", "ТУ_ПД"]:
@@ -134,9 +135,10 @@ def validate_all_inputs(
             return False, json.dumps({"error": f"Для типа требований '{REQUIREMENT_TYPES[req_type]}' необходимо загрузить файл технических условий"}, ensure_ascii=False)
 
         tu_filename = tu_file if isinstance(tu_file, str) else tu_file.name
-        valid, error = validate_file_by_name(tu_filename, "technical_requirements")
-        if not valid:
-            return False, json.dumps({"error": f"Технические условия: {error}"}, ensure_ascii=False)
+        # Проверка имени файла закомментирована
+        # valid, error = validate_file_by_name(tu_filename, "technical_requirements")
+        # if not valid:
+        #     return False, json.dumps({"error": f"Технические условия: {error}"}, ensure_ascii=False)
 
     return True, ""
 
@@ -426,8 +428,8 @@ def create_interface():
 
                 req_type = gr.Radio(
                     choices=list(REQUIREMENT_TYPES.keys()),
-                    label="Тип требований",
-                    value="ТЗ",
+                    label="Требования тех.отдела",
+                    value="ТУ_ФЭ",
                     info="Выберите тип требований для анализа"
                 )
 
