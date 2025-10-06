@@ -407,7 +407,7 @@ def _build_multimodal_prompt(stage: str, req_type: str, files: Dict[str, Any]) -
 def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: Dict[str, Dict]) -> List[Dict]:
     """
     Формирование мультимодального промпта для OpenRouter API.
-    Использует формат OpenAI vision API с PDF как images.
+    Использует формат file content type для PDF документов.
     """
     stage_prompt = PROMPTS.get(stage, PROMPTS["ФЭ"])
 
@@ -440,28 +440,28 @@ def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: D
 ДОКУМЕНТЫ ДЛЯ АНАЛИЗА:
 """
 
-    # Формируем content с PDF как image_url
+    # Формируем content с PDF как file content type
     content_parts = [{"type": "text", "text": task_description}]
 
     if "tz_document" in files_data:
         content_parts.append({"type": "text", "text": f"\n\nТЕХНИЧЕСКОЕ ЗАДАНИЕ ({files_data['tz_document']['filename']}):"})
         content_parts.append({
-            "type": "image_url",
-            "image_url": {"url": files_data["tz_document"]["data_uri"]}
+            "type": "file",
+            "file": {"url": files_data["tz_document"]["data_uri"]}
         })
 
     if "doc_document" in files_data:
         content_parts.append({"type": "text", "text": f"\n\nПРОЕКТНАЯ ДОКУМЕНТАЦИЯ ({files_data['doc_document']['filename']}):"})
         content_parts.append({
-            "type": "image_url",
-            "image_url": {"url": files_data["doc_document"]["data_uri"]}
+            "type": "file",
+            "file": {"url": files_data["doc_document"]["data_uri"]}
         })
 
     if "tu_document" in files_data:
         content_parts.append({"type": "text", "text": f"\n\nТЕХНИЧЕСКИЕ УСЛОВИЯ ({files_data['tu_document']['filename']}):"})
         content_parts.append({
-            "type": "image_url",
-            "image_url": {"url": files_data["tu_document"]["data_uri"]}
+            "type": "file",
+            "file": {"url": files_data["tu_document"]["data_uri"]}
         })
 
     return [{"role": "user", "content": content_parts}]

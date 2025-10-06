@@ -4,7 +4,9 @@
       "Bash(rm:*)",
       "Bash(netstat:*)",
       "Bash(findstr:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebSearch",
+      "WebFetch(domain:openrouter.ai)"
     ],
     "deny": [],
     "ask": []
