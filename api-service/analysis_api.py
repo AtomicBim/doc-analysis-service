@@ -335,11 +335,10 @@ async def _prepare_files_for_openrouter(files: List[Optional[UploadFile]]) -> Di
         file_ext = file.filename.lower().split('.')[-1]
         mime_type = "application/pdf" if file_ext == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-        # Формируем структуру для OpenRouter (только чистый base64, без data URI префикса!)
+        # Формируем структуру для OpenRouter (с data URI префиксом согласно документации)
         files_data[key] = {
             "filename": file.filename,
-            "file_data": base64_data,  # Только base64, без префикса
-            "mime_type": mime_type
+            "file_data": f"data:{mime_type};base64,{base64_data}"
         }
 
         logger.info(f"Файл {file.filename} подготовлен (размер: {len(base64_data)} символов base64)")
@@ -450,8 +449,7 @@ def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: D
             "type": "file",
             "file": {
                 "filename": files_data["tz_document"]["filename"],
-                "file_data": files_data["tz_document"]["file_data"],
-                "mime_type": files_data["tz_document"]["mime_type"]
+                "file_data": files_data["tz_document"]["file_data"]
             }
         })
 
@@ -461,8 +459,7 @@ def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: D
             "type": "file",
             "file": {
                 "filename": files_data["doc_document"]["filename"],
-                "file_data": files_data["doc_document"]["file_data"],
-                "mime_type": files_data["doc_document"]["mime_type"]
+                "file_data": files_data["doc_document"]["file_data"]
             }
         })
 
@@ -472,8 +469,7 @@ def _build_openrouter_multimodal_prompt(stage: str, req_type: str, files_data: D
             "type": "file",
             "file": {
                 "filename": files_data["tu_document"]["filename"],
-                "file_data": files_data["tu_document"]["file_data"],
-                "mime_type": files_data["tu_document"]["mime_type"]
+                "file_data": files_data["tu_document"]["file_data"]
             }
         })
 
@@ -539,12 +535,14 @@ async def _call_gemini_api(prompt: List[Any]) -> str:
 async def _call_openrouter_api(messages: List[Dict]) -> str:
     """Вызов OpenRouter API с мультимодальными сообщениями."""
     try:
-        # Добавляем плагин для парсинга PDF (используем native для Gemini моделей)
+        # Добавляем плагин для парсинга PDF
+        # pdf-text: для текстовых PDF (бесплатно, быстро)
+        # native: для моделей с нативной поддержкой PDF (лучшее качество, но может быть нестабильно)
         plugins = [
             {
                 "id": "file-parser",
                 "pdf": {
-                    "engine": "native"  # Используем нативную обработку PDF для Gemini
+                    "engine": "pdf-text"  # Используем текстовый парсер для стабильности
                 }
             }
         ]
