@@ -6,7 +6,11 @@ import os
 import json
 import logging
 import asyncio
+import warnings
 from typing import List, Optional, Dict, Any
+
+# Отключаем warnings о deprecation Assistants API
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="openai")
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File
