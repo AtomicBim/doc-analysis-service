@@ -1,19 +1,18 @@
 """
-FastAPI сервис для анализа документации с использованием Google Gemini API.
-Использует нативный File API для обработки документов до 2GB.
+FastAPI сервис для анализа документации с использованием OpenAI API.
+Использует Assistants API с File Search для обработки строительных чертежей в PDF.
 """
 import os
 import json
 import logging
 import asyncio
-import tempfile
 from typing import List, Optional, Dict, Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import google.generativeai as genai
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 # ============================
@@ -26,17 +25,19 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
-# Инициализация Gemini API
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    logger.error("GEMINI_API_KEY не установлен в переменных окружения!")
-    raise ValueError("GEMINI_API_KEY is required")
+# Инициализация OpenAI API
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    logger.error("OPENAI_API_KEY не установлен в переменных окружения!")
+    raise ValueError("OPENAI_API_KEY is required")
 
-genai.configure(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
+MAX_FILE_SIZE_MB = 40
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-logger.info(f"Используется Google Gemini: {GEMINI_MODEL}")
+logger.info(f"Используется OpenAI API: {OPENAI_MODEL}")
 
 
 # ============================
@@ -58,10 +59,10 @@ PROMPTS = {
 </анализ_документации_гк>""",
     "ФЭ": """<анализ_документации_фэ>
 <задача>
-Провести комплексный анализ соответствия проектной документации стадии Форэскиз (ФЭ) требованиям технического задания с детальной проверкой графических и текстовых материалов.
+Провести комплексный анализ соответствия проектной документации стадии Форэскиз (ФЭ) требованиям технического задания с детальной проверкой графических и текстовых материалов строительных чертежей.
 </задача>
 <исходные_данные>
-1. Проектная документация стадии ФЭ в формате PDF/DOCX, включающая:
+1. Проектная документация стадии ФЭ в формате PDF, включающая:
   - Графическую часть (планы, разрезы, фасады, схемы)
   - Текстовую часть (пояснительная записка, спецификации, ведомости)
 2. Техническое задание на разработку проектной документации стадии ФЭ
@@ -80,7 +81,7 @@ PROMPTS = {
 - Требует уточнения: недостаточно данных для однозначной оценки
 </критерии_оценки>
 <дополнительные_указания>
-- При анализе графических материалов обращать внимание на масштабы, размеры, обозначения
+- При анализе графических материалов обращать внимание на масштабы, размеры, обозначения на чертежах
 - В текстовой части проверять соответствие технико-экономических показателей
 - Фиксировать противоречия между разными разделами документации
 - Отмечать отсутствие обязательных для стадии ФЭ материалов
@@ -89,7 +90,7 @@ PROMPTS = {
     "ЭП": """<анализ_документации_эп>
 <задача>
 Провести комплексный анализ соответствия проектной документации стадии Эскизный проект (ЭП)
-требованиям технического задания с детальной проверкой архитектурных и объемно-планировочных решений.
+требованиям технического задания с детальной проверкой архитектурных и объемно-планировочных решений на строительных чертежах.
 </задача>
 <критерии_оценки>
 - Полностью исполнено: требование реализовано в полном объёме согласно ТЗ
@@ -101,7 +102,7 @@ PROMPTS = {
     "ПД": """<анализ_документации_пд>
 <задача>
 Провести комплексный анализ соответствия проектной документации стадии Проектная документация (ПД)
-требованиям технического задания и технических условий с проверкой всех разделов и инженерных систем.
+требованиям технического задания и технических условий с проверкой всех разделов и инженерных систем на строительных чертежах.
 </задача>
 <критерии_оценки>
 - Полностью исполнено: требование реализовано в полном объёме согласно ТЗ/ТУ
@@ -118,7 +119,7 @@ PROMPTS = {
     "РД": """<анализ_документации_рд>
 <задача>
 Провести комплексный анализ соответствия рабочей документации (РД) требованиям технического задания
-и технических условий с проверкой детализации решений для строительства.
+и технических условий с проверкой детализации решений для строительства на рабочих чертежах.
 </задача>
 <критерии_оценки>
 - Полностью исполнено: требование реализовано в полном объёме согласно ТЗ/ТУ
@@ -162,8 +163,8 @@ class AnalysisResponse(BaseModel):
 
 app = FastAPI(
     title="Document Analysis API",
-    description="API для анализа проектной документации с использованием Google Gemini",
-    version="3.0.0"
+    description="API для анализа строительной документации с использованием OpenAI",
+    version="4.0.0"
 )
 
 app.add_middleware(
@@ -184,8 +185,9 @@ async def root():
     return {
         "status": "ok",
         "service": "Document Analysis API",
-        "provider": "gemini",
-        "model": GEMINI_MODEL
+        "provider": "openai",
+        "model": OPENAI_MODEL,
+        "max_file_size_mb": MAX_FILE_SIZE_MB
     }
 
 @app.post("/analyze", response_model=AnalysisResponse)
@@ -203,24 +205,65 @@ async def analyze_documentation(
     try:
         logger.info(f"Получен запрос на анализ. Стадия: {stage}, Тип: {req_type}")
 
-        # Загрузка файлов в Gemini File API
-        logger.info("Загрузка файлов в Gemini File API...")
-        uploaded_files = await _upload_files_to_gemini_api([tz_document, doc_document, tu_document])
+        # Проверка размера файлов
+        files_to_check = [tz_document, doc_document]
+        if tu_document:
+            files_to_check.append(tu_document)
 
-        # Построение промпта
-        prompt = _build_multimodal_prompt(stage, req_type, uploaded_files)
+        for file in files_to_check:
+            file_size = await _get_file_size(file)
+            if file_size > MAX_FILE_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Файл {file.filename} слишком большой ({file_size / 1024 / 1024:.2f} MB). Максимальный размер: {MAX_FILE_SIZE_MB} MB"
+                )
 
-        # Отправка запроса в Gemini API
-        logger.info("Отправка запроса в Google Gemini API с файлами...")
-        analysis_result_text = await _call_gemini_api(prompt)
+        # Создаём vector store для файлов
+        logger.info("Создание vector store для документов...")
+        vector_store = await client.beta.vector_stores.create(
+            name=f"Analysis_{stage}_{req_type}"
+        )
+
+        # Загружаем файлы в vector store
+        logger.info("Загрузка файлов в OpenAI...")
+        file_ids = await _upload_files_to_vector_store(
+            vector_store.id,
+            [tz_document, doc_document, tu_document]
+        )
+
+        # Создаём ассистента с file search
+        logger.info("Создание ассистента для анализа...")
+        assistant = await client.beta.assistants.create(
+            name="Document Analyzer",
+            instructions="Ты эксперт по анализу строительной документации и чертежей. Анализируй PDF документы внимательно, обращая особое внимание на графические элементы чертежей.",
+            model=OPENAI_MODEL,
+            tools=[{"type": "file_search"}],
+            tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}},
+            temperature=TEMPERATURE
+        )
+
+        # Создаём thread и отправляем запрос
+        logger.info("Отправка запроса на анализ...")
+        analysis_result_text = await _run_analysis_with_assistant(
+            assistant.id,
+            stage,
+            req_type,
+            tu_document is not None
+        )
 
         # Парсинг результата
         logger.info("Парсинг результатов анализа...")
         parsed_result = _parse_analysis_response(analysis_result_text, stage, req_type)
 
+        # Очистка ресурсов
+        logger.info("Очистка ресурсов...")
+        await _cleanup_resources(assistant.id, vector_store.id)
+
         logger.info("Анализ завершен успешно")
         return parsed_result
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Ошибка при анализе документации: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка анализа: {str(e)}")
@@ -229,72 +272,65 @@ async def analyze_documentation(
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================
 
-async def _upload_files_to_gemini_api(files: List[Optional[UploadFile]]) -> Dict[str, Any]:
-    """Асинхронно загружает файлы в Gemini File API."""
+async def _get_file_size(file: UploadFile) -> int:
+    """Получает размер файла в байтах."""
+    content = await file.read()
+    await file.seek(0)  # Возвращаем указатель в начало
+    return len(content)
 
-    async def upload(file: UploadFile):
+
+async def _upload_files_to_vector_store(
+    vector_store_id: str,
+    files: List[Optional[UploadFile]]
+) -> List[str]:
+    """Загружает файлы в vector store."""
+    file_ids = []
+
+    for file in files:
+        if file is None:
+            continue
+
         logger.info(f"Загружается файл: {file.filename}")
-        file_bytes = await file.read()
+        content = await file.read()
 
-        # Gemini API требует путь к файлу, создаем временный файл
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
-            tmp.write(file_bytes)
-            tmp_path = tmp.name
+        # Загружаем файл в OpenAI
+        uploaded_file = await client.files.create(
+            file=(file.filename, content),
+            purpose="assistants"
+        )
+        file_ids.append(uploaded_file.id)
 
-        try:
-            # genai.upload_file не является async, запускаем в executor'е
-            loop = asyncio.get_running_loop()
-            uploaded_file = await loop.run_in_executor(
-                None,
-                lambda: genai.upload_file(path=tmp_path, display_name=file.filename)
-            )
-            logger.info(f"Файл {uploaded_file.name} ({uploaded_file.display_name}) успешно загружен.")
-            return file.filename, uploaded_file
-        finally:
-            # Удаляем временный файл
-            os.unlink(tmp_path)
+        # Добавляем файл в vector store
+        await client.beta.vector_stores.files.create(
+            vector_store_id=vector_store_id,
+            file_id=uploaded_file.id
+        )
 
-    # Определяем, какой файл какому ключу соответствует
-    file_map = {
-        files[0].filename: "tz_document",
-        files[1].filename: "doc_document",
-    }
-    if files[2]:
-        file_map[files[2].filename] = "tu_document"
+        logger.info(f"Файл {file.filename} загружен (ID: {uploaded_file.id})")
 
-    upload_tasks = [upload(f) for f in files if f]
-    uploaded_files_list = await asyncio.gather(*upload_tasks)
-
-    # Собираем словарь с правильными ключами
-    result_dict = {}
-    for filename, file_obj in uploaded_files_list:
-        key = file_map.get(filename)
-        if key:
-            result_dict[key] = file_obj
-
-    return result_dict
+    return file_ids
 
 
-def _build_multimodal_prompt(stage: str, req_type: str, files: Dict[str, Any]) -> List[Any]:
-    """Формирование мультимодального промпта для Gemini API с ссылками на файлы."""
+async def _run_analysis_with_assistant(
+    assistant_id: str,
+    stage: str,
+    req_type: str,
+    has_tu: bool
+) -> str:
+    """Запускает анализ с использованием ассистента."""
     stage_prompt = PROMPTS.get(stage, PROMPTS["ФЭ"])
 
-    prompt_parts = [
-        stage_prompt,
-        "\n\nТЕХНИЧЕСКОЕ ЗАДАНИЕ:",
-        files["tz_document"],
-        "\n\nПРОЕКТНАЯ ДОКУМЕНТАЦИЯ:",
-        files["doc_document"],
-    ]
+    prompt = f"""{stage_prompt}
 
-    if "tu_document" in files:
-        prompt_parts.extend(["\n\nТЕХНИЧЕСКИЕ УСЛОВИЯ:", files["tu_document"]])
-
-    prompt_parts.append(f"""
 ЗАДАЧА:
-Проанализируй соответствие проектной документации требованиям технического задания{' и технических условий' if 'tu_document' in files else ''}.
+Проанализируй соответствие проектной документации требованиям технического задания{' и технических условий' if has_tu else ''}.
 
-Верни результат в формате JSON со следующей структурой:
+ВАЖНО:
+- Проектная документация представляет собой строительные чертежи в формате PDF
+- Обрати особое внимание на графические элементы, размеры, схемы, планы
+- Проверь текстовые описания, спецификации и таблицы на чертежах
+
+Верни результат СТРОГО в формате JSON со следующей структурой:
 {{
   "requirements": [
     {{
@@ -312,28 +348,70 @@ def _build_multimodal_prompt(stage: str, req_type: str, files: Dict[str, Any]) -
 }}
 
 ВАЖНО: Верни ТОЛЬКО валидный JSON, без дополнительного текста.
-""")
-    return prompt_parts
+"""
 
+    # Создаём thread
+    thread = await client.beta.threads.create()
 
-async def _call_gemini_api(prompt: List[Any]) -> str:
-    """Вызов Gemini API с мультимодальным промптом."""
-    try:
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = await model.generate_content_async(
-            prompt,
-            generation_config=genai.types.GenerationConfig(temperature=TEMPERATURE)
+    # Добавляем сообщение
+    await client.beta.threads.messages.create(
+        thread_id=thread.id,
+        role="user",
+        content=prompt
+    )
+
+    # Запускаем run
+    run = await client.beta.threads.runs.create(
+        thread_id=thread.id,
+        assistant_id=assistant_id
+    )
+
+    # Ждём завершения
+    while run.status in ["queued", "in_progress"]:
+        await asyncio.sleep(1)
+        run = await client.beta.threads.runs.retrieve(
+            thread_id=thread.id,
+            run_id=run.id
         )
-        return response.text
+
+    if run.status != "completed":
+        raise Exception(f"Run завершился со статусом: {run.status}")
+
+    # Получаем ответ
+    messages = await client.beta.threads.messages.list(thread_id=thread.id)
+    response_message = messages.data[0]
+
+    # Извлекаем текст из ответа
+    response_text = response_message.content[0].text.value
+
+    # Удаляем thread
+    await client.beta.threads.delete(thread.id)
+
+    return response_text
+
+
+async def _cleanup_resources(assistant_id: str, vector_store_id: str):
+    """Удаляет созданные ресурсы."""
+    try:
+        await client.beta.assistants.delete(assistant_id)
+        await client.beta.vector_stores.delete(vector_store_id)
+        logger.info("Ресурсы успешно очищены")
     except Exception as e:
-        logger.error(f"Ошибка при вызове Gemini API: {e}", exc_info=True)
-        raise
+        logger.warning(f"Ошибка при очистке ресурсов: {e}")
 
 
 def _parse_analysis_response(response_text: str, stage: str, req_type: str) -> AnalysisResponse:
     """Парсинг JSON ответа от AI в Pydantic модель."""
     try:
-        cleaned_response = response_text.strip().removeprefix("```json").removesuffix("```").strip()
+        # Убираем возможные markdown блоки
+        cleaned_response = response_text.strip()
+        if cleaned_response.startswith("```"):
+            # Находим JSON между ```json и ```
+            start = cleaned_response.find("{")
+            end = cleaned_response.rfind("}") + 1
+            if start != -1 and end > start:
+                cleaned_response = cleaned_response[start:end]
+
         data = json.loads(cleaned_response)
 
         requirements = [RequirementAnalysis(**req) for req in data.get("requirements", [])]
@@ -346,7 +424,7 @@ def _parse_analysis_response(response_text: str, stage: str, req_type: str) -> A
         )
     except json.JSONDecodeError as e:
         logger.error(f"Ошибка парсинга JSON: {e}. Ответ AI: {response_text}")
-        raise ValueError(f"Не удалось обработать ответ от AI. Ошибка парсинга JSON.")
+        raise ValueError(f"Не удалось обработать ответ от AI. Ошибка парсинга JSON: {str(e)}")
 
 
 # ============================
