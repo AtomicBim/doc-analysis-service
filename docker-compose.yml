@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # API-сервис с Google Gemini (работает через VPN/SOCKS прокси)
+  doc-analysis-api:
+    build: ./api-service
+    container_name: doc_analysis_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # ✅ VPN прокси для доступа к Google Gemini API
+      - HTTPS_PROXY=socks5://172.17.0.1:10808
+      - HTTP_PROXY=socks5://172.17.0.1:10808
+      # Исключения для внутренних IP (не ходят через прокси)
+      - NO_PROXY=localhost,127.0.0.1,doc-analysis-ui
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Монтируем .env с API ключами (read-only для безопасности)
+      - ./api-service/.env:/app/.env:ro
+    networks:
+      - doc-analysis-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Gradio UI (БЕЗ прокси, работает в корпоративной сети)
+  doc-analysis-ui:
+    build: ./ui-service
+    container_name: doc_analysis_ui
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    environment:
+      # ❌ НЕТ прокси - работает напрямую в корпоративной сети
+      - PYTHONUNBUFFERED=1
+      # URL API-сервиса для обращения
+      - API_SERVICE_URL=http://doc-analysis-api:8000
+    networks:
+      - doc-analysis-net
+    depends_on:
+      - doc-analysis-api
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:7860/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  doc-analysis-net:
+    driver: bridge
