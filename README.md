@@ -142,8 +142,8 @@ docker-compose logs -f doc-analysis-ui
 ### Шаг 5: Доступ к интерфейсу
 
 Откройте в браузере:
-- **Gradio UI:** http://localhost:7861
-- **API Docs:** http://localhost:8002/docs
+- **Gradio UI:** http://192.168.42.188:7861
+- **API Docs:** http://192.168.42.188:8002/docs
 
 ## 📋 Использование
 
@@ -336,7 +336,7 @@ docker-compose restart doc-analysis-api
 **Решение:**
 ```bash
 # Проверьте, что API запущен
-curl http://localhost:8002/
+curl http://192.168.42.188:8002/
 
 # Проверьте переменную окружения в UI
 docker-compose exec doc-analysis-ui env | grep API_SERVICE_URL
@@ -434,7 +434,7 @@ upstream api_backend {
 ### Тест API напрямую
 
 ```bash
-curl -X POST http://localhost:8002/analyze \
+curl -X POST http://192.168.42.188:8002/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "stage": "ФЭ",
