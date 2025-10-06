@@ -7,6 +7,7 @@ import os
 import json
 import logging
 import asyncio
+import tempfile
 from typing import List, Optional, Dict, Any
 
 import uvicorn
@@ -270,14 +271,24 @@ async def _upload_files_to_gemini_api(files: List[Optional[UploadFile]]) -> Dict
     async def upload(file: UploadFile):
         logger.info(f"Загружается файл: {file.filename}")
         file_bytes = await file.read()
-        # genai.upload_file не является async, запускаем в executor'е
-        loop = asyncio.get_running_loop()
-        uploaded_file = await loop.run_in_executor(
-            None, 
-            lambda: genai.upload_file(name=file.filename, content=file_bytes)
-        )
-        logger.info(f"Файл {uploaded_file.name} ({uploaded_file.display_name}) успешно загружен.")
-        return file.filename, uploaded_file
+
+        # Gemini API требует путь к файлу, создаем временный файл
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        try:
+            # genai.upload_file не является async, запускаем в executor'е
+            loop = asyncio.get_running_loop()
+            uploaded_file = await loop.run_in_executor(
+                None,
+                lambda: genai.upload_file(path=tmp_path, display_name=file.filename)
+            )
+            logger.info(f"Файл {uploaded_file.name} ({uploaded_file.display_name}) успешно загружен.")
+            return file.filename, uploaded_file
+        finally:
+            # Удаляем временный файл
+            os.unlink(tmp_path)
 
     # Определяем, какой файл какому ключу соответствует
     # tz_document, doc_document, tu_document

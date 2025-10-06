@@ -74,29 +74,47 @@ def call_analysis_api(
     Вызов API-сервиса для анализа документации путем отправки файлов.
     """
     try:
-        files_to_send = {
-            'tz_document': (Path(tz_file_path).name, open(tz_file_path, 'rb'), 'application/octet-stream'),
-            'doc_document': (Path(doc_file_path).name, open(doc_file_path, 'rb'), 'application/octet-stream')
-        }
-        
-        if tu_file_path:
-            files_to_send['tu_document'] = (Path(tu_file_path).name, open(tu_file_path, 'rb'), 'application/octet-stream')
+        # Открываем файлы с context manager для автоматического закрытия
+        with open(tz_file_path, 'rb') as tz_f, open(doc_file_path, 'rb') as doc_f:
+            files_to_send = {
+                'tz_document': (Path(tz_file_path).name, tz_f, 'application/octet-stream'),
+                'doc_document': (Path(doc_file_path).name, doc_f, 'application/octet-stream')
+            }
 
-        data_to_send = {
-            "stage": stage,
-            "req_type": req_type
-        }
+            # Если есть ТУ, открываем его отдельно
+            if tu_file_path:
+                with open(tu_file_path, 'rb') as tu_f:
+                    files_to_send['tu_document'] = (Path(tu_file_path).name, tu_f, 'application/octet-stream')
 
-        print(f"📡 Отправка запроса с файлами к API: {API_SERVICE_URL}/analyze")
-        response = requests.post(
-            f"{API_SERVICE_URL}/analyze",
-            files=files_to_send,
-            data=data_to_send,
-            timeout=600  # 10 минут таймаут для сложного анализа
-        )
+                    data_to_send = {
+                        "stage": stage,
+                        "req_type": req_type
+                    }
 
-        response.raise_for_status()
-        return response.json()
+                    print(f"📡 Отправка запроса с файлами к API: {API_SERVICE_URL}/analyze")
+                    response = requests.post(
+                        f"{API_SERVICE_URL}/analyze",
+                        files=files_to_send,
+                        data=data_to_send,
+                        timeout=600
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            else:
+                data_to_send = {
+                    "stage": stage,
+                    "req_type": req_type
+                }
+
+                print(f"📡 Отправка запроса с файлами к API: {API_SERVICE_URL}/analyze")
+                response = requests.post(
+                    f"{API_SERVICE_URL}/analyze",
+                    files=files_to_send,
+                    data=data_to_send,
+                    timeout=600
+                )
+                response.raise_for_status()
+                return response.json()
 
     except requests.exceptions.ConnectionError:
         return {
