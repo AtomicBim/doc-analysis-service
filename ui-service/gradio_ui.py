@@ -487,6 +487,6 @@ if __name__ == "__main__":
     # Запуск на всех интерфейсах (доступен из корпоративной сети)
     interface.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=7861,
         share=False
     )
