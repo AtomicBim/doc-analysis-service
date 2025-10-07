@@ -21,16 +21,12 @@ API_SERVICE_URL = os.getenv("API_SERVICE_URL", "http://doc-analysis-api:8000")
 STAGES = {
     "ГК": "Градостроительная концепция",
     "ФЭ": "Форэскизный проект",
-    "ЭП": "Эскизный проект",
-    "ПД": "Проектная документация (стадия П)",
-    "РД": "Рабочая документация"
+    "ЭП": "Эскизный проект"
 }
 
 # Добавлен ТЗ для общего анализа
 REQUIREMENT_TYPES = {
     "ТЗ": "ТЗ на проектирование (общие требования)",
-    "ТУ_РД": "ТУ на проектирование для РД",
-    "ТУ_ПД": "ТУ на проектирование для ПД",
     "ТУ_ФЭ": "ТУ на проектирование для ФЭ",
     "ТУ_ЭП": "ТУ на проектирование для ЭП"
 }
@@ -44,7 +40,8 @@ ALLOWED_FORMATS = [".docx", ".pdf"]
 def validate_all_inputs(
     tz_file,
     doc_file,
-    req_type: str,
+    stage: str,
+    check_tu: bool,
     tu_file=None
 ) -> Tuple[bool, str]:
     """Комплексная валидация всех входных данных."""
@@ -54,8 +51,9 @@ def validate_all_inputs(
     if doc_file is None:
         return False, json.dumps({"error": "Не загружен файл документации"}, ensure_ascii=False)
 
-    if req_type in ["ТУ_РД", "ТУ_ПД"] and tu_file is None:
-        return False, json.dumps({"error": f"Для типа требований '{REQUIREMENT_TYPES[req_type]}' необходимо загрузить файл технических условий"}, ensure_ascii=False)
+    if check_tu:
+        if stage not in ["ФЭ", "ЭП"] and tu_file is None:
+            return False, json.dumps({"error": "Для выбранной стадии требуется загрузить файл ТУ или отключить опцию проверки ТУ"}, ensure_ascii=False)
 
     return True, ""
 
@@ -65,7 +63,7 @@ def validate_all_inputs(
 
 def call_analysis_api(
     stage: str,
-    req_type: str,
+    check_tu: bool,
     tz_file_path: str,
     doc_file_path: str,
     tu_file_path: Optional[str] = None
@@ -81,15 +79,16 @@ def call_analysis_api(
                 'doc_document': (Path(doc_file_path).name, doc_f, 'application/octet-stream')
             }
 
-            # Если есть ТУ, открываем его отдельно
+            data_to_send = {
+                "stage": stage,
+                "check_tu": str(check_tu).lower(),
+                "req_type": "ТЗ"
+            }
+
+            # Если есть ТУ файл (для стадий, где он обязателен), прикрепляем
             if tu_file_path:
                 with open(tu_file_path, 'rb') as tu_f:
                     files_to_send['tu_document'] = (Path(tu_file_path).name, tu_f, 'application/octet-stream')
-
-                    data_to_send = {
-                        "stage": stage,
-                        "req_type": req_type
-                    }
 
                     print(f"📡 Отправка запроса с файлами к API: {API_SERVICE_URL}/analyze")
                     response = requests.post(
@@ -100,21 +99,16 @@ def call_analysis_api(
                     )
                     response.raise_for_status()
                     return response.json()
-            else:
-                data_to_send = {
-                    "stage": stage,
-                    "req_type": req_type
-                }
 
-                print(f"📡 Отправка запроса с файлами к API: {API_SERVICE_URL}/analyze")
-                response = requests.post(
-                    f"{API_SERVICE_URL}/analyze",
-                    files=files_to_send,
-                    data=data_to_send,
-                    timeout=600
-                )
-                response.raise_for_status()
-                return response.json()
+            print(f"📡 Отправка запроса с файлами к API: {API_SERVICE_URL}/analyze")
+            response = requests.post(
+                f"{API_SERVICE_URL}/analyze",
+                files=files_to_send,
+                data=data_to_send,
+                timeout=600
+            )
+            response.raise_for_status()
+            return response.json()
 
     except requests.exceptions.ConnectionError:
         return {
@@ -194,13 +188,13 @@ def process_documentation_analysis(
     tz_file,
     doc_file,
     stage: str,
-    req_type: str,
+    check_tu: bool,
     tu_file=None
 ) -> str:
     """Основная функция обработки и анализа документации."""
     print("🔍 Начало анализа...")
 
-    valid, error_msg = validate_all_inputs(tz_file, doc_file, req_type, tu_file)
+    valid, error_msg = validate_all_inputs(tz_file, doc_file, stage, check_tu, tu_file)
     if not valid:
         return f"## ❌ Ошибка валидации\n\n```json\n{error_msg}\n```"
 
@@ -209,7 +203,7 @@ def process_documentation_analysis(
     # Gradio File object имеет атрибут .name с путем к временному файлу
     api_response = call_analysis_api(
         stage=stage,
-        req_type=req_type,
+        check_tu=check_tu,
         tz_file_path=tz_file.name,
         doc_file_path=doc_file.name,
         tu_file_path=tu_file.name if tu_file else None
@@ -222,9 +216,10 @@ def process_documentation_analysis(
     print("✅ Анализ завершен!")
     return result
 
-def update_tu_visibility(req_type: str):
-    """Обновление видимости поля загрузки ТУ."""
-    return gr.update(visible=(req_type in ["ТУ_РД", "ТУ_ПД"]))
+def update_tu_visibility(stage: str, check_tu: bool):
+    """Обновление видимости поля загрузки ТУ: требуется только если включена проверка ТУ и стадия не ФЭ/ЭП."""
+    needs_tu_upload = bool(check_tu and stage not in ["ФЭ", "ЭП"])  # ПД/РД удалены
+    return gr.update(visible=needs_tu_upload)
 
 # ============================ 
 # GRADIO ИНТЕРФЕЙС
@@ -248,7 +243,7 @@ def create_interface():
             with gr.Column(scale=1):
                 gr.Markdown("### ⚙️ Параметры анализа")
                 stage = gr.Radio(choices=list(STAGES.keys()), label="Стадия документации", value="ФЭ")
-                req_type = gr.Radio(choices=list(REQUIREMENT_TYPES.keys()), label="Тип требований", value="ТЗ")
+                check_tu = gr.Checkbox(label="Добавить проверку ТУ", value=False)
                 gr.Markdown(f"**API сервис:** `{API_SERVICE_URL}`")
 
         analyze_btn = gr.Button("🔍 Выполнить анализ", variant="primary", size="lg")
@@ -257,11 +252,12 @@ def create_interface():
         output = gr.Markdown(label="Результаты анализа")
 
         # Связывание событий
-        req_type.change(fn=update_tu_visibility, inputs=[req_type], outputs=[tu_file])
+        stage.change(fn=update_tu_visibility, inputs=[stage, check_tu], outputs=[tu_file])
+        check_tu.change(fn=update_tu_visibility, inputs=[stage, check_tu], outputs=[tu_file])
 
         analyze_btn.click(
             fn=process_documentation_analysis,
-            inputs=[tz_file, doc_file, stage, req_type, tu_file],
+            inputs=[tz_file, doc_file, stage, check_tu, tu_file],
             outputs=[output]
         )
 
