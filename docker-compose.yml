@@ -3,7 +3,9 @@ version: '3.8'
 services:
   # API-сервис с Google Gemini (работает через VPN/SOCKS прокси)
   doc-analysis-api:
-    build: ./api-service
+    build:
+      context: .
+      dockerfile: ./api-service/Dockerfile
     container_name: doc_analysis_api
     restart: unless-stopped
     ports:

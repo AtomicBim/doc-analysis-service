@@ -4,13 +4,16 @@ FROM python:3.11-slim-bullseye
 WORKDIR /app
 
 # Копируем зависимости
-COPY requirements.txt .
+COPY api-service/requirements.txt .
 
 # Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем код приложения
-COPY analysis_api.py .
+COPY api-service/analysis_api.py .
+
+# Копируем папку с промптами
+COPY prompts /prompts
 
 # Порт для FastAPI
 EXPOSE 8000
