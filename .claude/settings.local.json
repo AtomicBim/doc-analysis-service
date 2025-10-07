@@ -7,7 +7,13 @@
       "Bash(python:*)",
       "WebSearch",
       "WebFetch(domain:openrouter.ai)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(tree:*)",
+      "Bash(dir:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
