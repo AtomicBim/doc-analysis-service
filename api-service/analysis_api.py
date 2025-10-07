@@ -200,12 +200,19 @@ async def analyze_documentation(
                     detail=f"Файл {file.filename} слишком большой ({file_size / 1024 / 1024:.2f} MB). Максимальный размер: {MAX_FILE_SIZE_MB} MB"
                 )
 
-        # Read contents
+        # Read contents (after _get_file_size already read them, need to seek back)
+        await tz_document.seek(0)
+        await doc_document.seek(0)
+        if tu_document:
+            await tu_document.seek(0)
+
         tz_content = await tz_document.read()
         doc_content = await doc_document.read()
         tu_content = None
         if tu_document:
             tu_content = await tu_document.read()
+
+        logger.info(f"File sizes - TZ: {len(tz_content)} bytes, DOC: {len(doc_content)} bytes")
 
         # Extract TZ text
         logger.info("Extracting text from TZ...")
@@ -351,6 +358,9 @@ TZ text:
 
 async def ingest_doc(content: bytes, filename: str) -> List[Dict[str, str]]:
     """Ingests doc PDF into list of pages with text and base64 image."""
+    if not content:
+        raise ValueError(f"Empty content provided for file {filename}")
+
     pages = []
     doc = fitz.open(stream=content, filetype="pdf")
     for page_num, page in enumerate(doc):
