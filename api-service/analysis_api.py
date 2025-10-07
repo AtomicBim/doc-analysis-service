@@ -329,9 +329,9 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
 - number: integer or string identifier
 - text: the full text of the requirement
 - section: parent section or category
-- trace_id: unique identifier like 'req-{number}'
+- trace_id: unique identifier like 'req-{{number}}'
 
-Return STRICTLY as JSON: {{"requirements": [{{ "number": ..., "text": ..., "section": ..., "trace_id": ... }}]}}
+Return STRICTLY as JSON: {{"requirements": [{{"number": ..., "text": ..., "section": ..., "trace_id": ...}}]}}
 
 TZ text:
 {tz_text}"""
