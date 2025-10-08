@@ -493,10 +493,12 @@ async def analyze_batch_with_high_detail(
                 {"role": "user", "content": content}
             ],
             temperature=TEMPERATURE,
+            response_format={"type": "json_object"},  # Принудительный JSON
             max_tokens=4000
         )
 
         response_text = response.choices[0].message.content
+        logger.info(f"📄 [STAGE 3] Response preview: {response_text[:200]}...")
 
         # Парсим JSON
         json_start = response_text.find('{')
@@ -524,6 +526,8 @@ async def analyze_batch_with_high_detail(
             # Добавляем заглушки для пропущенных
             if len(results) < len(requirements_batch):
                 analyzed_numbers = {r.number for r in results}
+                missing = [req['number'] for req in requirements_batch if req['number'] not in analyzed_numbers]
+                logger.warning(f"⚠️ [STAGE 3] Пропущены требования: {missing}")
                 for req in requirements_batch:
                     if req['number'] not in analyzed_numbers:
                         results.append(RequirementAnalysis(
@@ -542,10 +546,12 @@ async def analyze_batch_with_high_detail(
             results.sort(key=lambda r: r.number)
             return results
         else:
+            logger.error(f"❌ [STAGE 3] No JSON in response. Full response: {response_text[:500]}")
             raise ValueError("No JSON found in response")
 
     except Exception as e:
         logger.error(f"❌ [STAGE 3] Ошибка анализа: {e}")
+        logger.error(f"Full response text: {response_text[:1000] if 'response_text' in locals() else 'N/A'}")
         return [
             RequirementAnalysis(
                 number=req['number'],
