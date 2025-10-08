@@ -9,8 +9,8 @@ COPY api-service/requirements.txt .
 # Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем код приложения
-COPY api-service/analysis_api.py .
+# Копируем код приложения (HYBRID VERSION)
+COPY api-service/analysis_api_hybrid.py ./analysis_api.py
 
 # Копируем папку с промптами
 COPY prompts /prompts
