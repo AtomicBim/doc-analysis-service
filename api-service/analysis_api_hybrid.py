@@ -108,12 +108,12 @@ TU_PROMPTS = load_tu_prompts()
 # ASSISTANTS API ФУНКЦИИ
 # ============================
 
-async def upload_to_vector_store(doc_content: bytes, filename: str) -> str:
+async def upload_file_for_assistant(doc_content: bytes, filename: str) -> str:
     """
-    Загружает PDF чертежей в Vector Store для File Search.
-    Возвращает vector_store_id.
+    Загружает PDF чертежей в OpenAI Files для использования с Assistants API.
+    Возвращает file_id.
     """
-    logger.info(f"📤 Создание Vector Store для {filename}...")
+    logger.info(f"📤 Загрузка файла {filename} в OpenAI...")
 
     def _sync_upload():
         # Сохраняем временный файл
@@ -122,34 +122,15 @@ async def upload_to_vector_store(doc_content: bytes, filename: str) -> str:
             f.write(doc_content)
 
         try:
-            # Сначала загружаем файл в OpenAI
+            # Загружаем файл в OpenAI
             with open(temp_file_path, 'rb') as file_stream:
                 uploaded_file = sync_client.files.create(
                     file=file_stream,
                     purpose="assistants"
                 )
 
-            # Создаем Vector Store с автоудалением через 1 день
-            vector_store = sync_client.beta.vector_stores.create(
-                name=f"Project Documentation - {filename}",
-                file_ids=[uploaded_file.id],
-                expires_after={"anchor": "last_active_at", "days": 1}
-            )
-
-            # Ждем завершения обработки файла
-            import time
-            max_wait = 60  # максимум 60 секунд
-            waited = 0
-            while waited < max_wait:
-                vs = sync_client.beta.vector_stores.retrieve(vector_store.id)
-                if vs.file_counts.completed > 0 or vs.file_counts.failed > 0:
-                    break
-                time.sleep(2)
-                waited += 2
-
-            logger.info(f"✅ Vector Store создан: {vector_store.id}, файлов обработано: {vs.file_counts.completed}")
-
-            return vector_store.id
+            logger.info(f"✅ Файл загружен: {uploaded_file.id}")
+            return uploaded_file.id
         finally:
             # Удаляем временный файл
             if os.path.exists(temp_file_path):
@@ -208,12 +189,12 @@ async def create_analysis_assistant(stage: str, req_type: str) -> str:
 
 async def analyze_requirement_with_assistant(
     assistant_id: str,
-    vector_store_id: str,
+    file_id: str,
     requirement: Dict[str, Any],
     request: Request
 ) -> Optional['RequirementAnalysis']:
     """
-    Анализирует одно требование через Assistants API с File Search.
+    Анализирует одно требование через Assistants API с файлом чертежей.
     Возвращает RequirementAnalysis или None при отключении клиента.
     """
     if await request.is_disconnected():
@@ -223,28 +204,33 @@ async def analyze_requirement_with_assistant(
     logger.info(f"🔍 Анализ требования {requirement['trace_id']}...")
 
     def _sync_analyze():
-        # Создаем Thread
-        thread = sync_client.beta.threads.create()
-
-        # Отправляем требование
-        sync_client.beta.threads.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content=f"""Проанализируй следующее требование из ТЗ:
+        # Создаем Thread с прикрепленным файлом
+        thread = sync_client.beta.threads.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""Проанализируй следующее требование из ТЗ:
 
 Номер: {requirement.get('number')}
 Раздел: {requirement.get('section', 'Общие требования')}
 Требование: {requirement['text']}
 
 Найди в проектной документации (чертежах), как это требование выполнено.
-Верни результат СТРОГО в JSON формате без дополнительного текста."""
+Верни результат СТРОГО в JSON формате без дополнительного текста.""",
+                    "attachments": [
+                        {
+                            "file_id": file_id,
+                            "tools": [{"type": "file_search"}]
+                        }
+                    ]
+                }
+            ]
         )
 
-        # Запускаем Assistant с File Search
+        # Запускаем Assistant
         run = sync_client.beta.threads.runs.create_and_poll(
             thread_id=thread.id,
             assistant_id=assistant_id,
-            tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}},
             timeout=300  # 5 минут на анализ одного требования
         )
 
@@ -327,16 +313,16 @@ async def analyze_requirement_with_assistant(
         )
 
 
-async def cleanup_assistant_resources(assistant_id: Optional[str], vector_store_id: Optional[str]):
+async def cleanup_assistant_resources(assistant_id: Optional[str], file_id: Optional[str]):
     """Удаляет временные ресурсы Assistants API."""
     def _sync_cleanup():
         try:
             if assistant_id:
                 sync_client.beta.assistants.delete(assistant_id)
                 logger.info(f"🗑️ Assistant удален: {assistant_id}")
-            if vector_store_id:
-                sync_client.beta.vector_stores.delete(vector_store_id)
-                logger.info(f"🗑️ Vector Store удален: {vector_store_id}")
+            if file_id:
+                sync_client.files.delete(file_id)
+                logger.info(f"🗑️ Файл удален: {file_id}")
         except Exception as e:
             logger.error(f"⚠️ Ошибка при очистке ресурсов: {e}")
 
@@ -535,7 +521,7 @@ async def analyze_documentation(
     - Чертежи: Assistants API с File Search
     """
     assistant_id = None
-    vector_store_id = None
+    file_id = None
 
     try:
         # Проверяем, не отключился ли клиент
@@ -605,15 +591,15 @@ async def analyze_documentation(
         logger.info(f"✅ Extracted {len(requirements)} requirements")
 
         # ============================================================
-        # ЭТАП 2: Загрузка чертежей в Assistants API Vector Store
+        # ЭТАП 2: Загрузка чертежей в OpenAI Files
         # ============================================================
 
-        logger.info("📤 [STEP 3/4] Uploading project documentation to Vector Store...")
+        logger.info("📤 [STEP 3/4] Uploading project documentation...")
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected before upload")
             return {"error": "Client disconnected"}
 
-        vector_store_id = await upload_to_vector_store(doc_content, doc_document.filename)
+        file_id = await upload_file_for_assistant(doc_content, doc_document.filename)
 
         # ============================================================
         # ЭТАП 3: Создание Assistant для анализа
@@ -632,20 +618,20 @@ async def analyze_documentation(
         for idx, req in enumerate(requirements, 1):
             if await request.is_disconnected():
                 logger.warning(f"⚠️ Client disconnected at requirement {idx}/{len(requirements)}")
-                await cleanup_assistant_resources(assistant_id, vector_store_id)
+                await cleanup_assistant_resources(assistant_id, file_id)
                 return {"error": "Client disconnected"}
 
             logger.info(f"🔍 [{idx}/{len(requirements)}] Analyzing: {req.get('trace_id')}")
 
             result = await analyze_requirement_with_assistant(
                 assistant_id=assistant_id,
-                vector_store_id=vector_store_id,
+                file_id=file_id,
                 requirement=req,
                 request=request
             )
 
             if result is None:  # Client disconnected
-                await cleanup_assistant_resources(assistant_id, vector_store_id)
+                await cleanup_assistant_resources(assistant_id, file_id)
                 return {"error": "Client disconnected"}
 
             analyzed_reqs.append(result)
@@ -657,7 +643,7 @@ async def analyze_documentation(
         logger.info("📝 Generating summary...")
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected before summary")
-            await cleanup_assistant_resources(assistant_id, vector_store_id)
+            await cleanup_assistant_resources(assistant_id, file_id)
             return {"error": "Client disconnected"}
 
         # Статистика для сводки
@@ -681,7 +667,7 @@ async def analyze_documentation(
         # Cleanup и возврат результата
         # ============================================================
 
-        await cleanup_assistant_resources(assistant_id, vector_store_id)
+        await cleanup_assistant_resources(assistant_id, file_id)
 
         parsed_result = AnalysisResponse(
             stage=stage,
@@ -694,11 +680,11 @@ async def analyze_documentation(
         return parsed_result
 
     except HTTPException:
-        await cleanup_assistant_resources(assistant_id, vector_store_id)
+        await cleanup_assistant_resources(assistant_id, file_id)
         raise
     except Exception as e:
         logger.error(f"❌ [HYBRID] Ошибка при анализе: {e}", exc_info=True)
-        await cleanup_assistant_resources(assistant_id, vector_store_id)
+        await cleanup_assistant_resources(assistant_id, file_id)
         raise HTTPException(status_code=500, detail=f"Ошибка анализа: {str(e)}")
 
 
