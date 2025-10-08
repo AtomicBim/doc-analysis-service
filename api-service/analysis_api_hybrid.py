@@ -22,12 +22,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from config import (
+    # Stage 1
+    STAGE1_MAX_PAGES, STAGE1_DPI, STAGE1_QUALITY,
+    STAGE1_STAMP_CROP, STAGE1_TOP_RIGHT_CROP, STAGE1_HEADER_CROP,
+    # Stage 2
+    STAGE2_MAX_PAGES, STAGE2_DPI, STAGE2_QUALITY, STAGE2_DETAIL,
+    # Stage 3
+    STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_TOKENS,
+    # Classification
+    CLASSIFICATION_MIN_BATCHES, CLASSIFICATION_MAX_BATCHES,
+    # Retry
+    RETRY_MAX_ATTEMPTS, RETRY_WAIT_EXPONENTIAL_MULTIPLIER, RETRY_WAIT_EXPONENTIAL_MAX,
+    # OpenAI
+    OPENAI_MODEL, OPENAI_TEMPERATURE,
+    # Logging
+    LOG_LEVEL, LOG_RESPONSE_PREVIEW_LENGTH, LOG_FULL_RESPONSE_ON_ERROR
+)
 
 # ============================
 # КОНФИГУРАЦИЯ
 # ============================
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=getattr(logging, LOG_LEVEL), format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Загрузка переменных окружения
@@ -40,8 +57,7 @@ if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is required")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
-TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
+TEMPERATURE = OPENAI_TEMPERATURE
 MAX_FILE_SIZE_MB = 40
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
@@ -146,11 +162,14 @@ async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pag
     return await asyncio.to_thread(_extract)
 
 
-async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: int = 150) -> List[Dict[str, Any]]:
+async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: int = None) -> List[Dict[str, Any]]:
     """
     Stage 1: Извлекает метаданные страниц (штамп, заголовки) через Vision API.
     Фокус на правый нижний угол (штамп), правый верхний, заголовки.
     """
+    if max_pages is None:
+        max_pages = STAGE1_MAX_PAGES
+
     logger.info(f"📋 [STAGE 1] Извлечение метаданных из {filename}...")
 
     def _extract_crops():
@@ -165,20 +184,35 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
 
         for page_num in range(total_pages):
             page = doc[page_num]
-            pix = page.get_pixmap(dpi=100)
+            pix = page.get_pixmap(dpi=STAGE1_DPI)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
             # Вырезаем ключевые области для быстрого анализа
             width, height = img.size
 
-            # Правый нижний угол (штамп) - 30% ширины, 20% высоты
-            stamp_crop = img.crop((int(width * 0.7), int(height * 0.8), width, height))
+            # Правый нижний угол (штамп)
+            stamp_crop = img.crop((
+                int(width * STAGE1_STAMP_CROP['left']),
+                int(height * STAGE1_STAMP_CROP['top']),
+                int(width * STAGE1_STAMP_CROP['right']),
+                int(height * STAGE1_STAMP_CROP['bottom'])
+            ))
 
-            # Правый верхний угол - 30% ширины, 15% высоты
-            top_right_crop = img.crop((int(width * 0.7), 0, width, int(height * 0.15)))
+            # Правый верхний угол
+            top_right_crop = img.crop((
+                int(width * STAGE1_TOP_RIGHT_CROP['left']),
+                int(height * STAGE1_TOP_RIGHT_CROP['top']),
+                int(width * STAGE1_TOP_RIGHT_CROP['right']),
+                int(height * STAGE1_TOP_RIGHT_CROP['bottom'])
+            ))
 
-            # Заголовок (верхняя часть) - 100% ширины, 10% высоты
-            header_crop = img.crop((0, 0, width, int(height * 0.1)))
+            # Заголовок (верхняя часть)
+            header_crop = img.crop((
+                int(width * STAGE1_HEADER_CROP['left']),
+                int(height * STAGE1_HEADER_CROP['top']),
+                int(width * STAGE1_HEADER_CROP['right']),
+                int(height * STAGE1_HEADER_CROP['bottom'])
+            ))
 
             # Объединяем в одно изображение для компактности
             combined = Image.new('RGB', (width, int(height * 0.45)))
@@ -187,7 +221,7 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
             combined.paste(stamp_crop, (int(width * 0.7), int(height * 0.25)))
 
             img_byte_arr = io.BytesIO()
-            combined.save(img_byte_arr, format='JPEG', quality=70)
+            combined.save(img_byte_arr, format='JPEG', quality=STAGE1_QUALITY)
             base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
             metadata_images.append({
                 'page_number': page_num + 1,
@@ -424,11 +458,11 @@ async def analyze_batch_with_high_detail(
             if page_num < 1 or page_num > len(doc):
                 continue
             page = doc[page_num - 1]  # page_num начинается с 1
-            pix = page.get_pixmap(dpi=150)  # Высокое качество
+            pix = page.get_pixmap(dpi=STAGE3_DPI)  # Высокое качество
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=85)  # Высокое качество
+            img.save(img_byte_arr, format='JPEG', quality=STAGE3_QUALITY)  # Высокое качество
             base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
             images.append(base64_image)
 
@@ -481,7 +515,7 @@ async def analyze_batch_with_high_detail(
             "type": "image_url",
             "image_url": {
                 "url": f"data:image/jpeg;base64,{base64_image}",
-                "detail": "high"  # Высокое качество
+                "detail": STAGE3_DETAIL  # Высокое качество
             }
         })
 
@@ -494,7 +528,7 @@ async def analyze_batch_with_high_detail(
             ],
             temperature=TEMPERATURE,
             response_format={"type": "json_object"},  # Принудительный JSON
-            max_tokens=4000
+            max_tokens=STAGE3_MAX_TOKENS
         )
 
         response_text = response.choices[0].message.content
@@ -506,7 +540,7 @@ async def analyze_batch_with_high_detail(
             logger.error(f"Finish reason: {response.choices[0].finish_reason}")
             raise ValueError("Response content is None - model refused to respond")
 
-        logger.info(f"📄 [STAGE 3] Response preview: {response_text[:200]}...")
+        logger.info(f"📄 [STAGE 3] Response preview: {response_text[:LOG_RESPONSE_PREVIEW_LENGTH]}...")
 
         # Парсим JSON
         json_start = response_text.find('{')
@@ -750,7 +784,7 @@ async def analyze_batch_with_vision(
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ТЗ/ТУ
 # ============================
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
 async def extract_text_from_pdf(content: bytes, filename: str) -> str:
     """Извлекает текст из PDF. Использует OCR если нет текстового слоя."""
     import base64
@@ -819,7 +853,7 @@ async def extract_text_from_pdf(content: bytes, filename: str) -> str:
     return text.strip()
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
 async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
     """Сегментирует ТЗ на отдельные требования используя GPT."""
     prompt = f"""Проанализируй следующий текст ТЗ и извлеки из него список требований.
@@ -853,13 +887,13 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
         raise ValueError("Failed to parse requirements JSON")
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
 async def classify_requirements_into_batches(requirements: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
     """
-    Классифицирует требования на 3-5 пакетов по строительному смыслу.
+    Классифицирует требования на {CLASSIFICATION_MIN_BATCHES}-{CLASSIFICATION_MAX_BATCHES} пакетов по строительному смыслу.
     Сохраняет исходный порядок требований.
     """
-    logger.info(f"🔍 Классификация {len(requirements)} требований на пакеты...")
+    logger.info(f"🔍 Классификация {len(requirements)} требований на {CLASSIFICATION_MIN_BATCHES}-{CLASSIFICATION_MAX_BATCHES} пакетов...")
 
     # Подготавливаем список требований для классификации
     reqs_text = "\n".join([
@@ -867,7 +901,7 @@ async def classify_requirements_into_batches(requirements: List[Dict[str, Any]])
         for req in requirements
     ])
 
-    prompt = f"""Проанализируй следующие строительные требования и сгруппируй их в 3-5 пакетов по смысловой близости.
+    prompt = f"""Проанализируй следующие строительные требования и сгруппируй их в {CLASSIFICATION_MIN_BATCHES}-{CLASSIFICATION_MAX_BATCHES} пакетов по смысловой близости.
 
 Критерии группировки:
 - Архитектурные решения (планировки, конструкции)
@@ -1090,7 +1124,7 @@ async def analyze_documentation(
         logger.info("📤 [STEP 4/7] STAGE 2: Converting to low-res and assessing relevance...")
         doc_images_low = await extract_pdf_pages_as_images(
             doc_content, doc_document.filename,
-            max_pages=150, detail="low", dpi=100, quality=70
+            max_pages=STAGE2_MAX_PAGES, detail=STAGE2_DETAIL, dpi=STAGE2_DPI, quality=STAGE2_QUALITY
         )
 
         page_mapping = await assess_page_relevance(pages_metadata, doc_images_low, requirements)
@@ -1129,10 +1163,9 @@ async def analyze_documentation(
 
             logger.info(f"📦 [STAGE 3] [{group_idx}/{len(page_to_reqs)}] Analyzing {len(reqs_group)} requirements on {len(pages_key)} pages")
 
-            # Разбиваем на пакеты по 3-5 требований если группа большая
-            batch_size = 4
-            for batch_start in range(0, len(reqs_group), batch_size):
-                batch = reqs_group[batch_start:batch_start + batch_size]
+            # Разбиваем на пакеты по N требований если группа большая
+            for batch_start in range(0, len(reqs_group), STAGE3_BATCH_SIZE):
+                batch = reqs_group[batch_start:batch_start + STAGE3_BATCH_SIZE]
 
                 batch_results = await analyze_batch_with_high_detail(
                     system_prompt=system_prompt,

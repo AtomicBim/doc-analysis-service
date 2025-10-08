@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем код приложения (HYBRID VERSION)
 COPY api-service/analysis_api_hybrid.py ./analysis_api.py
+COPY api-service/config.py ./config.py
 
 # Копируем папку с промптами
 COPY prompts /prompts
