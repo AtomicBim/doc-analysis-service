@@ -116,32 +116,44 @@ async def upload_to_vector_store(doc_content: bytes, filename: str) -> str:
     logger.info(f"📤 Создание Vector Store для {filename}...")
 
     def _sync_upload():
-        # Создаем Vector Store с автоудалением через 1 день
-        vector_store = sync_client.beta.vector_stores.create(
-            name=f"Project Documentation - {filename}",
-            expires_after={"anchor": "last_active_at", "days": 1}
-        )
-
         # Сохраняем временный файл
         temp_file_path = f"/tmp/{filename}"
         with open(temp_file_path, 'wb') as f:
             f.write(doc_content)
 
-        # Загружаем файл в Vector Store
         try:
-            with open(temp_file_path, 'rb') as f:
-                file_batch = sync_client.beta.vector_stores.file_batches.upload_and_poll(
-                    vector_store_id=vector_store.id,
-                    files=[f]
+            # Сначала загружаем файл в OpenAI
+            with open(temp_file_path, 'rb') as file_stream:
+                uploaded_file = sync_client.files.create(
+                    file=file_stream,
+                    purpose="assistants"
                 )
 
-            logger.info(f"✅ Vector Store создан: {vector_store.id}, статус: {file_batch.status}")
+            # Создаем Vector Store с автоудалением через 1 день
+            vector_store = sync_client.beta.vector_stores.create(
+                name=f"Project Documentation - {filename}",
+                file_ids=[uploaded_file.id],
+                expires_after={"anchor": "last_active_at", "days": 1}
+            )
+
+            # Ждем завершения обработки файла
+            import time
+            max_wait = 60  # максимум 60 секунд
+            waited = 0
+            while waited < max_wait:
+                vs = sync_client.beta.vector_stores.retrieve(vector_store.id)
+                if vs.file_counts.completed > 0 or vs.file_counts.failed > 0:
+                    break
+                time.sleep(2)
+                waited += 2
+
+            logger.info(f"✅ Vector Store создан: {vector_store.id}, файлов обработано: {vs.file_counts.completed}")
+
+            return vector_store.id
         finally:
             # Удаляем временный файл
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
-
-        return vector_store.id
 
     return await asyncio.to_thread(_sync_upload)
 
