@@ -380,7 +380,15 @@ async def ingest_doc(content: bytes, filename: str) -> List[Dict[str, str]]:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 async def get_embedding(text: str) -> List[float]:
-    """Gets embedding for text using OpenAI."""
+    """Gets embedding for text using OpenAI. Truncates if exceeds token limit."""
+    # text-embedding-3-small max tokens: 8191
+    # Approximate: 1 token ≈ 4 chars, safe limit = 8000 tokens ≈ 32000 chars
+    MAX_CHARS = 32000
+
+    if len(text) > MAX_CHARS:
+        logger.warning(f"Text exceeds {MAX_CHARS} chars ({len(text)}), truncating for embedding")
+        text = text[:MAX_CHARS]
+
     response = await client.embeddings.create(
         model="text-embedding-3-small",
         input=text
@@ -393,15 +401,16 @@ async def retrieve_relevant_pages(req_text: str, doc_pages: List[Dict[str, str]]
     """Retrieves top-k relevant pages using embedding similarity."""
     if not doc_pages:
         return []
-    
+
     req_emb = await get_embedding(req_text)
     page_embs = []
     for page in doc_pages:
-        if page['text'].strip():
-            page_embs.append(await get_embedding(page['text']))
+        page_text = page['text'].strip()
+        if page_text:
+            page_embs.append(await get_embedding(page_text))
         else:
             page_embs.append([0] * len(req_emb))  # Zero vector for empty text
-    
+
     similarities = [np.dot(req_emb, p_emb) / (np.linalg.norm(req_emb) * np.linalg.norm(p_emb) + 1e-8) for p_emb in page_embs]
     top_indices = np.argsort(similarities)[-TOP_K:][::-1]
     return [doc_pages[i] for i in top_indices]
