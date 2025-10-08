@@ -16,7 +16,8 @@
       "Bash(cat:*)",
       "Bash(docker logs:*)",
       "Bash(docker-compose:*)",
-      "WebFetch(domain:platform.openai.com)"
+      "WebFetch(domain:platform.openai.com)",
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "ask": []

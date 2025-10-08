@@ -178,44 +178,69 @@ def get_analysis_system_prompt(stage: str, req_type: str) -> str:
 """
 
 
-async def analyze_requirement_with_vision(
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=4, max=60),
+    retry=lambda retry_state: isinstance(retry_state.outcome.exception(), Exception) and '429' in str(retry_state.outcome.exception())
+)
+async def analyze_batch_with_vision(
     system_prompt: str,
     doc_images: List[str],
-    requirement: Dict[str, Any],
+    requirements_batch: List[Dict[str, Any]],
     request: Request
-) -> Optional['RequirementAnalysis']:
+) -> List['RequirementAnalysis']:
     """
-    Анализирует одно требование через Vision API с изображениями чертежей.
-    Возвращает RequirementAnalysis или None при отключении клиента.
+    Анализирует ПАКЕТ требований через Vision API с изображениями чертежей.
+    Возвращает список RequirementAnalysis.
     """
     if await request.is_disconnected():
-        logger.warning(f"⚠️ Client disconnected before analyzing {requirement['trace_id']}")
-        return None
+        logger.warning(f"⚠️ Client disconnected before analyzing batch")
+        return []
 
-    logger.info(f"🔍 Анализ требования {requirement['trace_id']}...")
+    batch_ids = [req['trace_id'] for req in requirements_batch]
+    logger.info(f"🔍 Анализ пакета из {len(requirements_batch)} требований: {', '.join(batch_ids[:3])}...")
+
+    # Формируем список требований для анализа
+    requirements_text = "\n\n".join([
+        f"Требование {req['number']} [{req.get('section', 'Общие')}]:\n{req['text']}"
+        for req in requirements_batch
+    ])
 
     # Формируем content для Vision API
     content = [
         {
             "type": "text",
-            "text": f"""Проанализируй следующее требование из ТЗ:
+            "text": f"""Проанализируй следующие требования из ТЗ и найди для КАЖДОГО требования решение в проектной документации (чертежах).
 
-Номер: {requirement.get('number')}
-Раздел: {requirement.get('section', 'Общие требования')}
-Требование: {requirement['text']}
+{requirements_text}
 
-Найди в проектной документации (чертежах), как это требование выполнено.
-Верни результат СТРОГО в JSON формате без дополнительного текста."""
+Верни результат СТРОГО в JSON формате:
+{{
+  "analyses": [
+    {{
+      "number": <номер требования>,
+      "requirement": "<текст требования>",
+      "status": "<Полностью исполнено|Частично исполнено|Не исполнено|Требует уточнения>",
+      "confidence": <0-100>,
+      "solution_description": "<описание>",
+      "reference": "<ссылка на листы/страницы>",
+      "discrepancies": "<несоответствия или '-'>",
+      "recommendations": "<рекомендации или '-'>"
+    }}
+  ]
+}}
+
+ВАЖНО: Верни анализ для ВСЕХ {len(requirements_batch)} требований в том же порядке!"""
         }
     ]
 
     # Добавляем изображения чертежей
-    for idx, base64_image in enumerate(doc_images, 1):
+    for base64_image in doc_images:
         content.append({
             "type": "image_url",
             "image_url": {
                 "url": f"data:image/jpeg;base64,{base64_image}",
-                "detail": "high"  # Высокое качество для детального анализа
+                "detail": "high"
             }
         })
 
@@ -227,7 +252,7 @@ async def analyze_requirement_with_vision(
                 {"role": "user", "content": content}
             ],
             temperature=TEMPERATURE,
-            max_tokens=2000
+            max_tokens=4000  # Больше токенов для пакета
         )
 
         response_text = response.choices[0].message.content
@@ -239,42 +264,84 @@ async def analyze_requirement_with_vision(
             json_str = response_text[json_start:json_end]
             data = json.loads(json_str)
 
-            return RequirementAnalysis(
-                **data,
-                section=requirement.get('section'),
-                trace_id=requirement['trace_id']
-            )
+            analyses = data.get('analyses', [])
+
+            # Создаем мапу по номеру требования для сопоставления
+            req_map = {req['number']: req for req in requirements_batch}
+
+            results = []
+            for analysis in analyses:
+                req_num = analysis.get('number')
+                if req_num in req_map:
+                    req = req_map[req_num]
+                    results.append(RequirementAnalysis(
+                        **analysis,
+                        section=req.get('section'),
+                        trace_id=req['trace_id']
+                    ))
+
+            logger.info(f"✅ Проанализировано {len(results)}/{len(requirements_batch)} требований в пакете")
+
+            # Если не все требования проанализированы, добавляем заглушки
+            if len(results) < len(requirements_batch):
+                analyzed_numbers = {r.number for r in results}
+                for req in requirements_batch:
+                    if req['number'] not in analyzed_numbers:
+                        results.append(RequirementAnalysis(
+                            number=req['number'],
+                            requirement=req['text'],
+                            status="Требует уточнения",
+                            confidence=0,
+                            solution_description="Не проанализировано",
+                            reference="-",
+                            discrepancies="Отсутствует в ответе модели",
+                            recommendations="Повторите анализ",
+                            section=req.get('section'),
+                            trace_id=req['trace_id']
+                        ))
+
+            # Сортируем по исходному порядку
+            results.sort(key=lambda r: r.number)
+            return results
+
         else:
             raise ValueError("No JSON found in response")
 
     except (json.JSONDecodeError, ValidationError) as e:
-        logger.error(f"❌ Failed to parse response for {requirement['trace_id']}: {e}")
-        return RequirementAnalysis(
-            number=requirement.get('number', 0),
-            requirement=requirement['text'],
-            status="Требует уточнения",
-            confidence=50,
-            solution_description="Не удалось получить ответ",
-            reference="-",
-            discrepancies="Ошибка парсинга ответа",
-            recommendations="Проверьте вручную",
-            section=requirement.get('section'),
-            trace_id=requirement['trace_id']
-        )
+        logger.error(f"❌ Failed to parse batch response: {e}")
+        # Возвращаем заглушки для всех требований
+        return [
+            RequirementAnalysis(
+                number=req['number'],
+                requirement=req['text'],
+                status="Требует уточнения",
+                confidence=50,
+                solution_description="Ошибка парсинга ответа",
+                reference="-",
+                discrepancies=str(e),
+                recommendations="Проверьте вручную",
+                section=req.get('section'),
+                trace_id=req['trace_id']
+            )
+            for req in requirements_batch
+        ]
     except Exception as e:
-        logger.error(f"❌ Error analyzing {requirement['trace_id']}: {e}")
-        return RequirementAnalysis(
-            number=requirement.get('number', 0),
-            requirement=requirement['text'],
-            status="Требует уточнения",
-            confidence=0,
-            solution_description="Ошибка анализа",
-            reference="-",
-            discrepancies=str(e),
-            recommendations="Повторите анализ",
-            section=requirement.get('section'),
-            trace_id=requirement['trace_id']
-        )
+        logger.error(f"❌ Error analyzing batch: {e}")
+        return [
+            RequirementAnalysis(
+                number=req['number'],
+                requirement=req['text'],
+                status="Требует уточнения",
+                confidence=0,
+                solution_description="Ошибка анализа",
+                reference="-",
+                discrepancies=str(e),
+                recommendations="Повторите анализ",
+                section=req.get('section'),
+                trace_id=req['trace_id']
+            )
+            for req in requirements_batch
+        ]
 
 
 # ============================
@@ -382,6 +449,78 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
     except json.JSONDecodeError as e:
         logger.error(f"❌ Failed to parse requirements JSON: {e}")
         raise ValueError("Failed to parse requirements JSON")
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+async def classify_requirements_into_batches(requirements: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """
+    Классифицирует требования на 3-5 пакетов по строительному смыслу.
+    Сохраняет исходный порядок требований.
+    """
+    logger.info(f"🔍 Классификация {len(requirements)} требований на пакеты...")
+
+    # Подготавливаем список требований для классификации
+    reqs_text = "\n".join([
+        f"{req['number']}. [{req.get('section', 'Общие')}] {req['text'][:150]}..."
+        for req in requirements
+    ])
+
+    prompt = f"""Проанализируй следующие строительные требования и сгруппируй их в 3-5 пакетов по смысловой близости.
+
+Критерии группировки:
+- Архитектурные решения (планировки, конструкции)
+- Инженерные системы (электрика, вентиляция, водоснабжение)
+- Материалы и отделка
+- Противопожарные требования
+- Доступность и безопасность
+
+Для каждого пакета верни массив номеров требований (number).
+
+Требования:
+{reqs_text}
+
+Верни СТРОГО в JSON формате:
+{{
+  "batches": [
+    {{"name": "Архитектурные решения", "requirement_numbers": [1, 3, 5]}},
+    {{"name": "Инженерные системы", "requirement_numbers": [2, 4]}}
+  ]
+}}"""
+
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=TEMPERATURE,
+        response_format={"type": "json_object"}
+    )
+
+    try:
+        data = json.loads(response.choices[0].message.content)
+        batches_data = data.get("batches", [])
+
+        # Создаем мапу требований по номеру
+        req_map = {req['number']: req for req in requirements}
+
+        # Формируем пакеты, сохраняя исходный порядок
+        batches = []
+        for batch_info in batches_data:
+            batch_reqs = []
+            for num in sorted(batch_info['requirement_numbers']):  # Сортируем по исходному номеру
+                if num in req_map:
+                    batch_reqs.append(req_map[num])
+            if batch_reqs:
+                batches.append(batch_reqs)
+
+        logger.info(f"✅ Создано {len(batches)} пакетов: {[len(b) for b in batches]} требований")
+        return batches
+
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.error(f"❌ Failed to classify requirements: {e}")
+        # Fallback: делим на равные пакеты по 5-7 требований
+        batch_size = max(5, len(requirements) // 4)
+        batches = [requirements[i:i+batch_size] for i in range(0, len(requirements), batch_size)]
+        logger.warning(f"⚠️ Используем fallback разбиение на {len(batches)} пакетов")
+        return batches
 
 
 async def _get_file_size(file: UploadFile) -> int:
@@ -536,10 +675,21 @@ async def analyze_documentation(
         logger.info(f"✅ Extracted {len(requirements)} requirements")
 
         # ============================================================
-        # ЭТАП 2: Конвертация чертежей в изображения
+        # ЭТАП 2: Классификация требований на пакеты
         # ============================================================
 
-        logger.info("📤 [STEP 3/4] Converting project documentation to images...")
+        logger.info("📦 [STEP 2.5/5] Classifying requirements into batches...")
+        if await request.is_disconnected():
+            logger.warning("⚠️ Client disconnected before classification")
+            return {"error": "Client disconnected"}
+
+        batches = await classify_requirements_into_batches(requirements)
+
+        # ============================================================
+        # ЭТАП 3: Конвертация чертежей в изображения
+        # ============================================================
+
+        logger.info("📤 [STEP 3/5] Converting project documentation to images...")
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected before conversion")
             return {"error": "Client disconnected"}
@@ -547,36 +697,39 @@ async def analyze_documentation(
         doc_images = await extract_pdf_pages_as_images(doc_content, doc_document.filename)
 
         # ============================================================
-        # ЭТАП 3: Подготовка system prompt
+        # ЭТАП 4: Подготовка system prompt
         # ============================================================
 
         system_prompt = get_analysis_system_prompt(stage, "ТЗ+ТУ" if has_tu else "ТЗ")
 
         # ============================================================
-        # ЭТАП 4: Анализ каждого требования через Vision API
+        # ЭТАП 5: Пакетный анализ требований через Vision API
         # ============================================================
 
-        logger.info(f"🔍 [STEP 4/4] Analyzing {len(requirements)} requirements with Vision API...")
+        logger.info(f"🔍 [STEP 4/5] Analyzing {len(requirements)} requirements in {len(batches)} batches with Vision API...")
         analyzed_reqs = []
 
-        for idx, req in enumerate(requirements, 1):
+        for batch_idx, batch in enumerate(batches, 1):
             if await request.is_disconnected():
-                logger.warning(f"⚠️ Client disconnected at requirement {idx}/{len(requirements)}")
+                logger.warning(f"⚠️ Client disconnected at batch {batch_idx}/{len(batches)}")
                 return {"error": "Client disconnected"}
 
-            logger.info(f"🔍 [{idx}/{len(requirements)}] Analyzing: {req.get('trace_id')}")
+            logger.info(f"📦 [{batch_idx}/{len(batches)}] Analyzing batch of {len(batch)} requirements")
 
-            result = await analyze_requirement_with_vision(
+            batch_results = await analyze_batch_with_vision(
                 system_prompt=system_prompt,
                 doc_images=doc_images,
-                requirement=req,
+                requirements_batch=batch,
                 request=request
             )
 
-            if result is None:  # Client disconnected
+            if not batch_results:  # Client disconnected
                 return {"error": "Client disconnected"}
 
-            analyzed_reqs.append(result)
+            analyzed_reqs.extend(batch_results)
+
+        # Сортируем по исходному порядку из ТЗ
+        analyzed_reqs.sort(key=lambda r: r.number)
 
         # ============================================================
         # ЭТАП 5: Генерация сводки
