@@ -107,7 +107,7 @@ TU_PROMPTS = load_tu_prompts()
 # PDF PROCESSING ФУНКЦИИ
 # ============================
 
-async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pages: int = 50) -> List[str]:
+async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pages: int = 20) -> List[str]:
     """
     Извлекает страницы PDF как base64-encoded изображения для Vision API.
     Возвращает список base64 строк.
@@ -127,13 +127,13 @@ async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pag
 
         for page_num in range(total_pages):
             page = doc[page_num]
-            # Рендерим страницу в изображение (150 DPI для хорошего качества)
-            pix = page.get_pixmap(dpi=150)
+            # Рендерим страницу в изображение (100 DPI для оптимального баланса)
+            pix = page.get_pixmap(dpi=100)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-            # Конвертируем в base64
+            # Конвертируем в base64 (quality=70 для экономии токенов)
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=85)
+            img.save(img_byte_arr, format='JPEG', quality=70)
             base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
             images.append(base64_image)
 
@@ -240,7 +240,7 @@ async def analyze_batch_with_vision(
             "type": "image_url",
             "image_url": {
                 "url": f"data:image/jpeg;base64,{base64_image}",
-                "detail": "high"
+                "detail": "low"  # Экономим токены: 85 вместо 765 на изображение
             }
         })
 
@@ -372,12 +372,12 @@ async def extract_text_from_pdf(content: bytes, filename: str) -> str:
 
         for page_num, page in enumerate(doc):
             # Рендерим страницу в изображение
-            pix = page.get_pixmap(dpi=150)
+            pix = page.get_pixmap(dpi=100)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
             # Конвертируем в base64
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=85)
+            img.save(img_byte_arr, format='JPEG', quality=70)
             base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
 
             # OCR через Vision
@@ -516,8 +516,8 @@ async def classify_requirements_into_batches(requirements: List[Dict[str, Any]])
 
     except (json.JSONDecodeError, KeyError) as e:
         logger.error(f"❌ Failed to classify requirements: {e}")
-        # Fallback: делим на равные пакеты по 5-7 требований
-        batch_size = max(5, len(requirements) // 4)
+        # Fallback: делим на равные пакеты по 3-4 требования (меньше токенов)
+        batch_size = max(3, len(requirements) // 6)
         batches = [requirements[i:i+batch_size] for i in range(0, len(requirements), batch_size)]
         logger.warning(f"⚠️ Используем fallback разбиение на {len(batches)} пакетов")
         return batches
