@@ -97,7 +97,7 @@ def call_analysis_api(
                         f"{API_SERVICE_URL}/analyze",
                         files=files_to_send,
                         data=data_to_send,
-                        timeout=1200  # 20 минут для больших документов (~100 страниц)
+                        timeout=2400  # 40 минут для больших проектов (100+ страниц, 30+ требований)
                     )
                     response.raise_for_status()
                     return response.json()
@@ -107,7 +107,7 @@ def call_analysis_api(
                 f"{API_SERVICE_URL}/analyze",
                 files=files_to_send,
                 data=data_to_send,
-                timeout=1200  # 20 минут для больших документов (~100 страниц)
+                timeout=2400  # 40 минут для больших проектов (100+ страниц, 30+ требований)
             )
             response.raise_for_status()
             return response.json()
@@ -118,7 +118,7 @@ def call_analysis_api(
         }
     except requests.exceptions.Timeout:
         return {
-            "error": "Превышено время ожидания ответа от API-сервиса (20 минут). Попробуйте уменьшить размер документа или обратитесь к администратору."
+            "error": "Превышено время ожидания ответа от API-сервиса (40 минут). Попробуйте уменьшить размер документа, отключить Stage 4 (поиск противоречий) в config.py или обратитесь к администратору."
         }
     except requests.exceptions.HTTPError as e:
         # Пытаемся извлечь detail из JSON-ответа, если возможно
