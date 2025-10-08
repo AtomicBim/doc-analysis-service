@@ -11,7 +11,8 @@ import warnings
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 import fitz  # pymupdf
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from openai import RateLimitError
 
 # Отключаем warnings о deprecation
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="openai")
@@ -29,7 +30,7 @@ from config import (
     # Stage 2
     STAGE2_MAX_PAGES, STAGE2_DPI, STAGE2_QUALITY, STAGE2_DETAIL,
     # Stage 3
-    STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_TOKENS, STAGE3_RETRY_ON_REFUSAL,
+    STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_TOKENS, STAGE3_RETRY_ON_REFUSAL, STAGE3_MAX_PAGES_PER_REQUEST,
     # Classification
     CLASSIFICATION_MIN_BATCHES, CLASSIFICATION_MAX_BATCHES,
     # Retry
@@ -443,6 +444,41 @@ async def analyze_batch_with_high_detail(
     batch_ids = [req['trace_id'] for req in requirements_batch]
     logger.info(f"🔍 [STAGE 3] Анализ {len(requirements_batch)} требований на страницах {page_numbers[:5]}{'...' if len(page_numbers) > 5 else ''}")
 
+    # Проверка лимита страниц (защита от 429 rate limit)
+    if len(page_numbers) > STAGE3_MAX_PAGES_PER_REQUEST:
+        logger.warning(f"⚠️ [STAGE 3] Слишком много страниц ({len(page_numbers)} > {STAGE3_MAX_PAGES_PER_REQUEST})")
+        logger.warning(f"⚠️ [STAGE 3] Разбиваем требования на подгруппы по страницам...")
+
+        # Разбиваем page_numbers на чанки
+        all_results = []
+        for i in range(0, len(page_numbers), STAGE3_MAX_PAGES_PER_REQUEST):
+            chunk_pages = page_numbers[i:i + STAGE3_MAX_PAGES_PER_REQUEST]
+            logger.info(f"📄 [STAGE 3] Обработка подгруппы страниц {i+1}-{min(i+STAGE3_MAX_PAGES_PER_REQUEST, len(page_numbers))}")
+
+            # Рекурсивный вызов с меньшим количеством страниц
+            chunk_results = await analyze_batch_with_high_detail(
+                system_prompt=system_prompt,
+                doc_content=doc_content,
+                page_numbers=chunk_pages,
+                requirements_batch=requirements_batch,
+                request=request
+            )
+
+            if not chunk_results:
+                return []  # Client disconnected
+
+            all_results.extend(chunk_results)
+
+        # Убираем дубликаты по номеру требования
+        seen = set()
+        unique_results = []
+        for result in all_results:
+            if result.number not in seen:
+                seen.add(result.number)
+                unique_results.append(result)
+
+        return unique_results
+
     # Извлекаем только релевантные страницы в высоком качестве
     logger.info(f"📄 [STAGE 3] Извлечение {len(page_numbers)} страниц в высоком качестве...")
 
@@ -639,6 +675,46 @@ async def analyze_batch_with_high_detail(
         else:
             logger.error(f"❌ [STAGE 3] No JSON in response. Full response: {response_text[:500]}")
             raise ValueError("No JSON found in response")
+
+    except RateLimitError as e:
+        error_msg = str(e)
+        logger.error(f"❌ [STAGE 3] Rate limit exceeded: {error_msg}")
+
+        # Проверяем, это превышение TPM из-за большого запроса
+        if "tokens per min" in error_msg.lower() and len(page_numbers) > 10:
+            logger.warning(f"⚠️ [STAGE 3] Превышен лимит токенов из-за {len(page_numbers)} страниц")
+            logger.warning(f"⚠️ [STAGE 3] Автоматически разбиваем на меньшие части...")
+
+            # Разбиваем страницы пополам
+            mid = len(page_numbers) // 2
+            chunk1_pages = page_numbers[:mid]
+            chunk2_pages = page_numbers[mid:]
+
+            all_results = []
+            for chunk_pages in [chunk1_pages, chunk2_pages]:
+                chunk_results = await analyze_batch_with_high_detail(
+                    system_prompt=system_prompt,
+                    doc_content=doc_content,
+                    page_numbers=chunk_pages,
+                    requirements_batch=requirements_batch,
+                    request=request
+                )
+                if not chunk_results:
+                    return []
+                all_results.extend(chunk_results)
+
+            # Убираем дубликаты
+            seen = set()
+            unique_results = []
+            for result in all_results:
+                if result.number not in seen:
+                    seen.add(result.number)
+                    unique_results.append(result)
+
+            return unique_results
+
+        # Обычная 429 ошибка - retry декоратор обработает
+        raise
 
     except Exception as e:
         logger.error(f"❌ [STAGE 3] Ошибка анализа: {e}")
