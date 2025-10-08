@@ -47,6 +47,7 @@ STAGE3_QUALITY = 85  # JPEG качество (высокое)
 STAGE3_DETAIL = "high"  # OpenAI Vision detail level (765 tokens/image)
 STAGE3_BATCH_SIZE = 4  # Количество требований в одном batch запросе
 STAGE3_MAX_TOKENS = 4000  # Максимальное количество токенов в ответе
+STAGE3_RETRY_ON_REFUSAL = True  # Повторять запрос с батчами размером 1 при refusal
 
 # ============================================================
 # Классификация требований в батчи

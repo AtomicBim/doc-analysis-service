@@ -29,7 +29,7 @@ from config import (
     # Stage 2
     STAGE2_MAX_PAGES, STAGE2_DPI, STAGE2_QUALITY, STAGE2_DETAIL,
     # Stage 3
-    STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_TOKENS,
+    STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_TOKENS, STAGE3_RETRY_ON_REFUSAL,
     # Classification
     CLASSIFICATION_MIN_BATCHES, CLASSIFICATION_MAX_BATCHES,
     # Retry
@@ -532,13 +532,62 @@ async def analyze_batch_with_high_detail(
         )
 
         response_text = response.choices[0].message.content
+        refusal = response.choices[0].message.refusal
 
-        # Проверка на None
-        if response_text is None:
-            logger.error(f"❌ [STAGE 3] Response content is None!")
-            logger.error(f"Full response object: {response}")
+        # Проверка на None или refusal
+        if response_text is None or refusal:
+            logger.error(f"❌ [STAGE 3] Model refused to respond!")
+            logger.error(f"Refusal message: {refusal}")
             logger.error(f"Finish reason: {response.choices[0].finish_reason}")
-            raise ValueError("Response content is None - model refused to respond")
+            logger.error(f"Requirements in batch: {[req['number'] for req in requirements_batch]}")
+            logger.error(f"Requirements text preview: {[req['text'][:100] for req in requirements_batch]}")
+
+            # Если батч больше 1 и включен retry - пробуем по одному
+            if STAGE3_RETRY_ON_REFUSAL and len(requirements_batch) > 1:
+                logger.warning(f"⚠️ [STAGE 3] Retry: analyzing {len(requirements_batch)} requirements individually...")
+                all_results = []
+                for single_req in requirements_batch:
+                    try:
+                        single_result = await analyze_batch_with_high_detail(
+                            system_prompt=system_prompt,
+                            doc_content=doc_content,
+                            page_numbers=page_numbers,
+                            requirements_batch=[single_req],
+                            request=request
+                        )
+                        all_results.extend(single_result)
+                    except Exception as e:
+                        logger.error(f"❌ [STAGE 3] Failed to analyze requirement {single_req['number']}: {e}")
+                        all_results.append(RequirementAnalysis(
+                            number=single_req['number'],
+                            requirement=single_req['text'],
+                            status="Требует уточнения",
+                            confidence=0,
+                            solution_description="Ошибка при индивидуальном анализе",
+                            reference="-",
+                            discrepancies=str(e),
+                            recommendations="Проверьте вручную",
+                            section=single_req.get('section'),
+                            trace_id=single_req['trace_id']
+                        ))
+                return all_results
+
+            # Возвращаем заглушки для всех требований
+            return [
+                RequirementAnalysis(
+                    number=req['number'],
+                    requirement=req['text'],
+                    status="Требует уточнения",
+                    confidence=0,
+                    solution_description="Модель отказалась анализировать",
+                    reference="-",
+                    discrepancies=f"Content filter: {refusal or 'Response is None'}",
+                    recommendations="Переформулируйте требование или проверьте вручную",
+                    section=req.get('section'),
+                    trace_id=req['trace_id']
+                )
+                for req in requirements_batch
+            ]
 
         logger.info(f"📄 [STAGE 3] Response preview: {response_text[:LOG_RESPONSE_PREVIEW_LENGTH]}...")
 
