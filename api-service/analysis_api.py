@@ -19,7 +19,7 @@ import base64
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="openai")
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Form, UploadFile, File
+from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 from openai import AsyncOpenAI
@@ -173,6 +173,7 @@ async def root():
 
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze_documentation(
+    request: Request,
     stage: str = Form(...),
     check_tu: bool = Form(False),
     req_type: str = Form("ТЗ"),
@@ -185,6 +186,10 @@ async def analyze_documentation(
     Принимает файлы и метаданные в multipart/form-data.
     """
     try:
+        # Проверяем, не отключился ли клиент
+        if await request.is_disconnected():
+            logger.warning("Client disconnected before analysis started. Aborting.")
+            raise HTTPException(status_code=499, detail="Client disconnected")
         logger.info(f"Получен запрос на анализ. Стадия: {stage}, check_tu: {check_tu}")
 
         # Проверка размера файлов
@@ -216,10 +221,16 @@ async def analyze_documentation(
 
         # Extract TZ text
         logger.info("Extracting text from TZ...")
+        if await request.is_disconnected():
+            logger.warning("Client disconnected during TZ extraction. Aborting.")
+            return {"error": "Client disconnected"}
         tz_text = await extract_text_from_pdf(tz_content, tz_document.filename)
 
         # Segment requirements
         logger.info("Segmenting requirements...")
+        if await request.is_disconnected():
+            logger.warning("Client disconnected during requirements segmentation. Aborting.")
+            return {"error": "Client disconnected"}
         requirements = await segment_requirements(tz_text)
 
         if not requirements:
@@ -227,6 +238,9 @@ async def analyze_documentation(
 
         # Ingest doc
         logger.info("Ingesting project documentation...")
+        if await request.is_disconnected():
+            logger.warning("Client disconnected during doc ingestion. Aborting.")
+            return {"error": "Client disconnected"}
         doc_pages = await ingest_doc(doc_content, doc_document.filename)
 
         # TODO: Handle TU similarly if check_tu
@@ -240,18 +254,30 @@ async def analyze_documentation(
         # For now, placeholder for retrieval and analysis
         # Will replace in next edits
         logger.info("Retrieving relevant pages...")
+        if await request.is_disconnected():
+            logger.warning("Client disconnected before retrieval. Aborting.")
+            return {"error": "Client disconnected"}
         all_relevant_pages = {}
         for req in requirements:
+            if await request.is_disconnected():
+                logger.warning("Client disconnected during page retrieval. Aborting.")
+                return {"error": "Client disconnected"}
             all_relevant_pages[req['trace_id']] = await retrieve_relevant_pages(req['text'], doc_pages)
-        
+
         logger.info("Analyzing requirements in batches...")
         analyzed_reqs = []
         for i in range(0, len(requirements), BATCH_SIZE):
+            if await request.is_disconnected():
+                logger.warning(f"Client disconnected during batch {i // BATCH_SIZE + 1}. Aborting.")
+                return {"error": "Client disconnected"}
             batch = requirements[i:i + BATCH_SIZE]
             analyzed_batch = await analyze_batch(batch, all_relevant_pages, stage, "ТЗ+ТУ" if has_tu else "ТЗ")
             analyzed_reqs.extend(analyzed_batch)
-        
+
         # Generate summary
+        if await request.is_disconnected():
+            logger.warning("Client disconnected before summary generation. Aborting.")
+            return {"error": "Client disconnected"}
         summary_prompt = f"Summarize analysis of {len(analyzed_reqs)} requirements: {json.dumps([r.dict() for r in analyzed_reqs])}"
         summary_response = await client.chat.completions.create(
             model=OPENAI_MODEL,

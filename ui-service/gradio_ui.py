@@ -71,6 +71,8 @@ def call_analysis_api(
     """
     Вызов API-сервиса для анализа документации путем отправки файлов.
     """
+    session = requests.Session()
+
     try:
         # Открываем файлы с context manager для автоматического закрытия
         with open(tz_file_path, 'rb') as tz_f, open(doc_file_path, 'rb') as doc_f:
@@ -91,7 +93,7 @@ def call_analysis_api(
                     files_to_send['tu_document'] = (Path(tu_file_path).name, tu_f, 'application/octet-stream')
 
                     print(f"📡 Отправка запроса с файлами к API: {API_SERVICE_URL}/analyze")
-                    response = requests.post(
+                    response = session.post(
                         f"{API_SERVICE_URL}/analyze",
                         files=files_to_send,
                         data=data_to_send,
@@ -101,7 +103,7 @@ def call_analysis_api(
                     return response.json()
 
             print(f"📡 Отправка запроса с файлами к API: {API_SERVICE_URL}/analyze")
-            response = requests.post(
+            response = session.post(
                 f"{API_SERVICE_URL}/analyze",
                 files=files_to_send,
                 data=data_to_send,
@@ -131,6 +133,9 @@ def call_analysis_api(
         return {
             "error": f"Неожиданная ошибка при обращении к API: {str(e)}"
         }
+    finally:
+        # Закрываем сессию для освобождения ресурсов
+        session.close()
 
 # ============================ 
 # ФОРМАТИРОВАНИЕ РЕЗУЛЬТАТОВ
@@ -231,6 +236,9 @@ def create_interface():
         gr.Markdown("""
         # 📋 Анализ соответствия проектной документации
         Система автоматического анализа на соответствие требованиям ТЗ/ТУ с использованием AI.
+
+        ⚠️ **ВАЖНО:** Не закрывайте эту вкладку во время анализа! При закрытии вкладки анализ будет прерван,
+        прогресс потеряется, и потребуется запускать анализ заново.
         """)
 
         with gr.Row():
