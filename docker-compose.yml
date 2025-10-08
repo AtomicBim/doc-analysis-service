@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # API-сервис с Google Gemini (работает через VPN/SOCKS прокси)
+  # API-сервис с OpenAI API (работает через VPN/SOCKS прокси)
   doc-analysis-api:
     build:
       context: .
@@ -11,7 +11,7 @@ services:
     ports:
       - "8002:8000"
     environment:
-      # ✅ VPN прокси для доступа к Google Gemini API
+      # ✅ VPN прокси для доступа к OpenAI API
       - HTTPS_PROXY=socks5://172.17.0.1:10808
       - HTTP_PROXY=socks5://172.17.0.1:10808
       # Исключения для внутренних IP (не ходят через прокси)

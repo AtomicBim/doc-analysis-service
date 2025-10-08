@@ -25,16 +25,14 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from config import (
     # Stage 1
-    STAGE1_MAX_PAGES, STAGE1_DPI, STAGE1_QUALITY,
+    STAGE1_MAX_PAGES, STAGE1_DPI, STAGE1_QUALITY, STAGE1_MAX_PAGES_PER_REQUEST,
     STAGE1_STAMP_CROP, STAGE1_TOP_RIGHT_CROP, STAGE1_HEADER_CROP,
     # Stage 2
-    STAGE2_MAX_PAGES, STAGE2_DPI, STAGE2_QUALITY, STAGE2_DETAIL,
+    STAGE2_MAX_PAGES, STAGE2_DPI, STAGE2_QUALITY, STAGE2_DETAIL, STAGE2_MAX_PAGES_PER_REQUEST,
     # Stage 3
     STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_TOKENS, STAGE3_RETRY_ON_REFUSAL, STAGE3_MAX_PAGES_PER_REQUEST,
     # Stage 4
     STAGE4_ENABLED, STAGE4_SAMPLE_PAGES_PER_SECTION, STAGE4_DPI, STAGE4_QUALITY, STAGE4_DETAIL, STAGE4_MAX_TOKENS,
-    # Classification
-    CLASSIFICATION_MIN_BATCHES, CLASSIFICATION_MAX_BATCHES,
     # Retry
     RETRY_MAX_ATTEMPTS, RETRY_WAIT_EXPONENTIAL_MULTIPLIER, RETRY_WAIT_EXPONENTIAL_MAX,
     # OpenAI
@@ -237,7 +235,86 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
 
     crops = await asyncio.to_thread(_extract_crops)
 
-    # Формируем запрос к GPT для извлечения метаданных
+    # Проверяем лимит страниц (защита от 429 rate limit)
+    if len(crops) > STAGE1_MAX_PAGES_PER_REQUEST:
+        logger.warning(f"⚠️ [STAGE 1] Слишком много страниц ({len(crops)} > {STAGE1_MAX_PAGES_PER_REQUEST})")
+        logger.warning(f"⚠️ [STAGE 1] Разбиваем на батчи по {STAGE1_MAX_PAGES_PER_REQUEST} страниц...")
+
+        all_pages_metadata = []
+        for batch_start in range(0, len(crops), STAGE1_MAX_PAGES_PER_REQUEST):
+            batch_end = min(batch_start + STAGE1_MAX_PAGES_PER_REQUEST, len(crops))
+            batch_crops = crops[batch_start:batch_end]
+
+            logger.info(f"📄 [STAGE 1] Обработка батча страниц {batch_start+1}-{batch_end}...")
+
+            # Формируем запрос для батча
+            content = [{
+                "type": "text",
+                "text": """Проанализируй метаданные строительных чертежей.
+Для каждой страницы извлеки:
+- Название листа/раздела (из заголовка или штампа)
+- Раздел проекта (АР, КР, ИС, ОВ, ВК, ЭС и т.д.)
+- Тип чертежа (план, разрез, схема, спецификация)
+- Номер листа
+
+ВАЖНО: Обрати особое внимание на:
+- Правый нижний угол (штамп документации)
+- Правый верхний угол
+- Заголовки и названия листов
+
+Верни JSON:
+{
+  "pages": [
+    {"page": 1, "title": "План 1 этажа", "section": "АР", "type": "план", "sheet_number": "АР-01"},
+    {"page": 2, "title": "Схема электроснабжения", "section": "ЭС", "type": "схема", "sheet_number": "ЭС-03"}
+  ]
+}"""
+            }]
+
+            # Добавляем изображения батча
+            for item in batch_crops:
+                content.append({
+                    "type": "text",
+                    "text": f"\n--- Страница {item['page_number']} ---"
+                })
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{item['image']}",
+                        "detail": "low"
+                    }
+                })
+
+            try:
+                response = await client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=[{"role": "user", "content": content}],
+                    temperature=TEMPERATURE,
+                    response_format={"type": "json_object"},
+                    max_tokens=4000
+                )
+
+                data = json.loads(response.choices[0].message.content)
+                batch_metadata = data.get('pages', [])
+                all_pages_metadata.extend(batch_metadata)
+                logger.info(f"✅ [STAGE 1] Батч {batch_start+1}-{batch_end}: извлечено {len(batch_metadata)} метаданных")
+
+            except Exception as e:
+                logger.error(f"❌ [STAGE 1] Ошибка в батче {batch_start+1}-{batch_end}: {e}")
+                # Fallback для этого батча
+                for item in batch_crops:
+                    all_pages_metadata.append({
+                        "page": item['page_number'],
+                        "title": f"Страница {item['page_number']}",
+                        "section": "Unknown",
+                        "type": "unknown",
+                        "sheet_number": f"{item['page_number']}"
+                    })
+
+        logger.info(f"✅ [STAGE 1] Извлечено метаданных для {len(all_pages_metadata)} страниц (всего батчей: {(len(crops)-1)//STAGE1_MAX_PAGES_PER_REQUEST + 1})")
+        return all_pages_metadata
+
+    # Если страниц мало - отправляем одним запросом (оригинальная логика)
     logger.info(f"🔍 [STAGE 1] Анализ метаданных через Vision API...")
 
     content = [{
@@ -309,6 +386,46 @@ async def assess_page_relevance(
     """
     logger.info(f"🔍 [STAGE 2] Оценка релевантности {len(pages_metadata)} страниц для {len(requirements)} требований...")
 
+    # Проверяем лимит страниц (защита от 429 rate limit)
+    if len(doc_images_low) > STAGE2_MAX_PAGES_PER_REQUEST:
+        logger.warning(f"⚠️ [STAGE 2] Слишком много страниц ({len(doc_images_low)} > {STAGE2_MAX_PAGES_PER_REQUEST})")
+        logger.warning(f"⚠️ [STAGE 2] Используем только метаданные для оценки релевантности")
+
+        # Используем метаданные + эвристику для mapping (без изображений)
+        page_mapping = {}
+        for req in requirements:
+            req_num = req['number']
+            req_text = req['text'].lower()
+            req_section = req.get('section', '').lower()
+
+            relevant_pages = []
+            for page_meta in pages_metadata:
+                page_num = page_meta['page']
+                page_title = page_meta.get('title', '').lower()
+                page_section = page_meta.get('section', '').lower()
+                page_type = page_meta.get('type', '').lower()
+
+                # Простая эвристика: совпадение по секции или ключевым словам
+                score = 0
+                if req_section and page_section and req_section in page_section:
+                    score += 2
+                if any(keyword in page_title for keyword in ['план', 'схема', 'разрез'] if keyword in req_text):
+                    score += 1
+
+                if score > 0:
+                    relevant_pages.append(page_num)
+
+            # Если ничего не нашли - берем первые 20 страниц
+            if not relevant_pages:
+                relevant_pages = list(range(1, min(21, len(pages_metadata) + 1)))
+
+            page_mapping[req_num] = relevant_pages[:10]  # Ограничиваем до 10 страниц
+            logger.info(f"📄 [STAGE 2] Req {req_num}: страницы {page_mapping[req_num][:5]}{'...' if len(page_mapping[req_num]) > 5 else ''} (на основе метаданных)")
+
+        logger.info(f"✅ [STAGE 2] Построен mapping для {len(page_mapping)} требований (эвристический режим)")
+        return page_mapping
+
+    # Если страниц мало - используем полный анализ с изображениями
     # Формируем описание страниц
     pages_description = "\n".join([
         f"Страница {p['page']}: {p.get('title', 'N/A')} [{p.get('section', 'N/A')}] - {p.get('type', 'N/A')}"
@@ -920,170 +1037,6 @@ async def analyze_batch_with_high_detail(
         ]
 
 
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=2, min=4, max=60),
-    retry=lambda retry_state: isinstance(retry_state.outcome.exception(), Exception) and '429' in str(retry_state.outcome.exception())
-)
-async def analyze_batch_with_vision(
-    system_prompt: str,
-    doc_images: List[str],
-    requirements_batch: List[Dict[str, Any]],
-    request: Request
-) -> List['RequirementAnalysis']:
-    """
-    Анализирует ПАКЕТ требований через Vision API с изображениями чертежей.
-    Возвращает список RequirementAnalysis.
-    """
-    if await request.is_disconnected():
-        logger.warning(f"⚠️ Client disconnected before analyzing batch")
-        return []
-
-    batch_ids = [req['trace_id'] for req in requirements_batch]
-    logger.info(f"🔍 Анализ пакета из {len(requirements_batch)} требований: {', '.join(batch_ids[:3])}...")
-
-    # Формируем список требований для анализа
-    requirements_text = "\n\n".join([
-        f"Требование {req['number']} [{req.get('section', 'Общие')}]:\n{req['text']}"
-        for req in requirements_batch
-    ])
-
-    # Формируем content для Vision API
-    content = [
-        {
-            "type": "text",
-            "text": f"""Проанализируй следующие требования из ТЗ и найди для КАЖДОГО требования решение в проектной документации (чертежах).
-
-{requirements_text}
-
-Верни результат СТРОГО в JSON формате:
-{{
-  "analyses": [
-    {{
-      "number": <номер требования>,
-      "requirement": "<текст требования>",
-      "status": "<Полностью исполнено|Частично исполнено|Не исполнено|Требует уточнения>",
-      "confidence": <0-100>,
-      "solution_description": "<описание>",
-      "reference": "<ссылка на листы/страницы>",
-      "discrepancies": "<несоответствия или '-'>",
-      "recommendations": "<рекомендации или '-'>"
-    }}
-  ]
-}}
-
-ВАЖНО: Верни анализ для ВСЕХ {len(requirements_batch)} требований в том же порядке!"""
-        }
-    ]
-
-    # Добавляем изображения чертежей
-    for base64_image in doc_images:
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{base64_image}",
-                "detail": "low"  # Экономим токены: 85 вместо 765 на изображение
-            }
-        })
-
-    try:
-        response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": content}
-            ],
-            temperature=TEMPERATURE,
-            max_tokens=4000  # Больше токенов для пакета
-        )
-
-        response_text = response.choices[0].message.content
-
-        # Парсим JSON из ответа
-        json_start = response_text.find('{')
-        json_end = response_text.rfind('}') + 1
-        if json_start != -1 and json_end > json_start:
-            json_str = response_text[json_start:json_end]
-            data = json.loads(json_str)
-
-            analyses = data.get('analyses', [])
-
-            # Создаем мапу по номеру требования для сопоставления
-            req_map = {req['number']: req for req in requirements_batch}
-
-            results = []
-            for analysis in analyses:
-                req_num = analysis.get('number')
-                if req_num in req_map:
-                    req = req_map[req_num]
-                    results.append(RequirementAnalysis(
-                        **analysis,
-                        section=req.get('section'),
-                        trace_id=req['trace_id']
-                    ))
-
-            logger.info(f"✅ Проанализировано {len(results)}/{len(requirements_batch)} требований в пакете")
-
-            # Если не все требования проанализированы, добавляем заглушки
-            if len(results) < len(requirements_batch):
-                analyzed_numbers = {r.number for r in results}
-                for req in requirements_batch:
-                    if req['number'] not in analyzed_numbers:
-                        results.append(RequirementAnalysis(
-                            number=req['number'],
-                            requirement=req['text'],
-                            status="Требует уточнения",
-                            confidence=0,
-                            solution_description="Не проанализировано",
-                            reference="-",
-                            discrepancies="Отсутствует в ответе модели",
-                            recommendations="Повторите анализ",
-                            section=req.get('section'),
-                            trace_id=req['trace_id']
-                        ))
-
-            # Сортируем по исходному порядку
-            results.sort(key=lambda r: r.number)
-            return results
-
-        else:
-            raise ValueError("No JSON found in response")
-
-    except (json.JSONDecodeError, ValidationError) as e:
-        logger.error(f"❌ Failed to parse batch response: {e}")
-        # Возвращаем заглушки для всех требований
-        return [
-            RequirementAnalysis(
-                number=req['number'],
-                requirement=req['text'],
-                status="Требует уточнения",
-                confidence=50,
-                solution_description="Ошибка парсинга ответа",
-                reference="-",
-                discrepancies=str(e),
-                recommendations="Проверьте вручную",
-                section=req.get('section'),
-                trace_id=req['trace_id']
-            )
-            for req in requirements_batch
-        ]
-    except Exception as e:
-        logger.error(f"❌ Error analyzing batch: {e}")
-        return [
-            RequirementAnalysis(
-                number=req['number'],
-                requirement=req['text'],
-                status="Требует уточнения",
-                confidence=0,
-                solution_description="Ошибка анализа",
-                reference="-",
-                discrepancies=str(e),
-                recommendations="Повторите анализ",
-                section=req.get('section'),
-                trace_id=req['trace_id']
-            )
-            for req in requirements_batch
-        ]
 
 
 # ============================
@@ -1193,76 +1146,6 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
         raise ValueError("Failed to parse requirements JSON")
 
 
-@retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
-async def classify_requirements_into_batches(requirements: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-    """
-    Классифицирует требования на {CLASSIFICATION_MIN_BATCHES}-{CLASSIFICATION_MAX_BATCHES} пакетов по строительному смыслу.
-    Сохраняет исходный порядок требований.
-    """
-    logger.info(f"🔍 Классификация {len(requirements)} требований на {CLASSIFICATION_MIN_BATCHES}-{CLASSIFICATION_MAX_BATCHES} пакетов...")
-
-    # Подготавливаем список требований для классификации
-    reqs_text = "\n".join([
-        f"{req['number']}. [{req.get('section', 'Общие')}] {req['text'][:150]}..."
-        for req in requirements
-    ])
-
-    prompt = f"""Проанализируй следующие строительные требования и сгруппируй их в {CLASSIFICATION_MIN_BATCHES}-{CLASSIFICATION_MAX_BATCHES} пакетов по смысловой близости.
-
-Критерии группировки:
-- Архитектурные решения (планировки, конструкции)
-- Инженерные системы (электрика, вентиляция, водоснабжение)
-- Материалы и отделка
-- Противопожарные требования
-- Доступность и безопасность
-
-Для каждого пакета верни массив номеров требований (number).
-
-Требования:
-{reqs_text}
-
-Верни СТРОГО в JSON формате:
-{{
-  "batches": [
-    {{"name": "Архитектурные решения", "requirement_numbers": [1, 3, 5]}},
-    {{"name": "Инженерные системы", "requirement_numbers": [2, 4]}}
-  ]
-}}"""
-
-    response = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=TEMPERATURE,
-        response_format={"type": "json_object"}
-    )
-
-    try:
-        data = json.loads(response.choices[0].message.content)
-        batches_data = data.get("batches", [])
-
-        # Создаем мапу требований по номеру
-        req_map = {req['number']: req for req in requirements}
-
-        # Формируем пакеты, сохраняя исходный порядок
-        batches = []
-        for batch_info in batches_data:
-            batch_reqs = []
-            for num in sorted(batch_info['requirement_numbers']):  # Сортируем по исходному номеру
-                if num in req_map:
-                    batch_reqs.append(req_map[num])
-            if batch_reqs:
-                batches.append(batch_reqs)
-
-        logger.info(f"✅ Создано {len(batches)} пакетов: {[len(b) for b in batches]} требований")
-        return batches
-
-    except (json.JSONDecodeError, KeyError) as e:
-        logger.error(f"❌ Failed to classify requirements: {e}")
-        # Fallback: делим на равные пакеты по 3-4 требования (меньше токенов)
-        batch_size = max(3, len(requirements) // 6)
-        batches = [requirements[i:i+batch_size] for i in range(0, len(requirements), batch_size)]
-        logger.warning(f"⚠️ Используем fallback разбиение на {len(batches)} пакетов")
-        return batches
 
 
 async def _get_file_size(file: UploadFile) -> int:

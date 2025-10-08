@@ -1,4 +1,4 @@
-# Dockerfile для API-сервиса с Google Gemini
+# Dockerfile для API-сервиса с OpenAI Vision API
 FROM python:3.11-slim-bullseye
 
 WORKDIR /app
