@@ -20,7 +20,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 from dotenv import load_dotenv
 
 # ============================
@@ -40,6 +40,7 @@ if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is required")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+sync_client = OpenAI(api_key=OPENAI_API_KEY)  # Для Assistants API
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
 MAX_FILE_SIZE_MB = 40
@@ -114,32 +115,35 @@ async def upload_to_vector_store(doc_content: bytes, filename: str) -> str:
     """
     logger.info(f"📤 Создание Vector Store для {filename}...")
 
-    # Создаем Vector Store с автоудалением через 1 день
-    vector_store = await client.beta.vector_stores.create(
-        name=f"Project Documentation - {filename}",
-        expires_after={"anchor": "last_active_at", "days": 1}
-    )
+    def _sync_upload():
+        # Создаем Vector Store с автоудалением через 1 день
+        vector_store = sync_client.beta.vector_stores.create(
+            name=f"Project Documentation - {filename}",
+            expires_after={"anchor": "last_active_at", "days": 1}
+        )
 
-    # Сохраняем временный файл
-    temp_file_path = f"/tmp/{filename}"
-    with open(temp_file_path, 'wb') as f:
-        f.write(doc_content)
+        # Сохраняем временный файл
+        temp_file_path = f"/tmp/{filename}"
+        with open(temp_file_path, 'wb') as f:
+            f.write(doc_content)
 
-    # Загружаем файл в Vector Store
-    try:
-        with open(temp_file_path, 'rb') as f:
-            file_batch = await client.beta.vector_stores.file_batches.upload_and_poll(
-                vector_store_id=vector_store.id,
-                files=[f]
-            )
+        # Загружаем файл в Vector Store
+        try:
+            with open(temp_file_path, 'rb') as f:
+                file_batch = sync_client.beta.vector_stores.file_batches.upload_and_poll(
+                    vector_store_id=vector_store.id,
+                    files=[f]
+                )
 
-        logger.info(f"✅ Vector Store создан: {vector_store.id}, статус: {file_batch.status}")
-    finally:
-        # Удаляем временный файл
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
+            logger.info(f"✅ Vector Store создан: {vector_store.id}, статус: {file_batch.status}")
+        finally:
+            # Удаляем временный файл
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
 
-    return vector_store.id
+        return vector_store.id
+
+    return await asyncio.to_thread(_sync_upload)
 
 
 async def create_analysis_assistant(stage: str, req_type: str) -> str:
@@ -176,16 +180,18 @@ async def create_analysis_assistant(stage: str, req_type: str) -> str:
 - Возвращай ТОЛЬКО JSON, без дополнительных пояснений
 """
 
-    assistant = await client.beta.assistants.create(
-        name=f"Document Analyzer - {stage}",
-        instructions=instructions,
-        model=OPENAI_MODEL,
-        tools=[{"type": "file_search"}],
-        temperature=TEMPERATURE
-    )
+    def _sync_create():
+        assistant = sync_client.beta.assistants.create(
+            name=f"Document Analyzer - {stage}",
+            instructions=instructions,
+            model=OPENAI_MODEL,
+            tools=[{"type": "file_search"}],
+            temperature=TEMPERATURE
+        )
+        logger.info(f"🤖 Assistant создан: {assistant.id}")
+        return assistant.id
 
-    logger.info(f"🤖 Assistant создан: {assistant.id}")
-    return assistant.id
+    return await asyncio.to_thread(_sync_create)
 
 
 async def analyze_requirement_with_assistant(
@@ -204,14 +210,15 @@ async def analyze_requirement_with_assistant(
 
     logger.info(f"🔍 Анализ требования {requirement['trace_id']}...")
 
-    # Создаем Thread
-    thread = await client.beta.threads.create()
+    def _sync_analyze():
+        # Создаем Thread
+        thread = sync_client.beta.threads.create()
 
-    # Отправляем требование
-    await client.beta.threads.messages.create(
-        thread_id=thread.id,
-        role="user",
-        content=f"""Проанализируй следующее требование из ТЗ:
+        # Отправляем требование
+        sync_client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=f"""Проанализируй следующее требование из ТЗ:
 
 Номер: {requirement.get('number')}
 Раздел: {requirement.get('section', 'Общие требования')}
@@ -219,34 +226,40 @@ async def analyze_requirement_with_assistant(
 
 Найди в проектной документации (чертежах), как это требование выполнено.
 Верни результат СТРОГО в JSON формате без дополнительного текста."""
-    )
-
-    # Запускаем Assistant с File Search
-    run = await client.beta.threads.runs.create_and_poll(
-        thread_id=thread.id,
-        assistant_id=assistant_id,
-        tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}},
-        timeout=300  # 5 минут на анализ одного требования
-    )
-
-    if run.status != 'completed':
-        logger.error(f"❌ Run failed for {requirement['trace_id']}: {run.status}")
-        return RequirementAnalysis(
-            number=requirement.get('number', 0),
-            requirement=requirement['text'],
-            status="Требует уточнения",
-            confidence=0,
-            solution_description="Ошибка анализа",
-            reference="-",
-            discrepancies=f"Assistant run status: {run.status}",
-            recommendations="Повторите анализ",
-            section=requirement.get('section'),
-            trace_id=requirement['trace_id']
         )
 
-    # Получаем ответ
-    messages = await client.beta.threads.messages.list(thread_id=thread.id, order="desc", limit=1)
-    assistant_message = messages.data[0]
+        # Запускаем Assistant с File Search
+        run = sync_client.beta.threads.runs.create_and_poll(
+            thread_id=thread.id,
+            assistant_id=assistant_id,
+            tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}},
+            timeout=300  # 5 минут на анализ одного требования
+        )
+
+        if run.status != 'completed':
+            logger.error(f"❌ Run failed for {requirement['trace_id']}: {run.status}")
+            return RequirementAnalysis(
+                number=requirement.get('number', 0),
+                requirement=requirement['text'],
+                status="Требует уточнения",
+                confidence=0,
+                solution_description="Ошибка анализа",
+                reference="-",
+                discrepancies=f"Assistant run status: {run.status}",
+                recommendations="Повторите анализ",
+                section=requirement.get('section'),
+                trace_id=requirement['trace_id']
+            )
+
+        # Получаем ответ
+        messages = sync_client.beta.threads.messages.list(thread_id=thread.id, order="desc", limit=1)
+        return messages.data[0]
+
+    assistant_message = await asyncio.to_thread(_sync_analyze)
+
+    # Если вернулся RequirementAnalysis (ошибка), возвращаем его
+    if isinstance(assistant_message, RequirementAnalysis):
+        return assistant_message
 
     # Извлекаем текст ответа
     response_text = ""
@@ -304,15 +317,18 @@ async def analyze_requirement_with_assistant(
 
 async def cleanup_assistant_resources(assistant_id: Optional[str], vector_store_id: Optional[str]):
     """Удаляет временные ресурсы Assistants API."""
-    try:
-        if assistant_id:
-            await client.beta.assistants.delete(assistant_id)
-            logger.info(f"🗑️ Assistant удален: {assistant_id}")
-        if vector_store_id:
-            await client.beta.vector_stores.delete(vector_store_id)
-            logger.info(f"🗑️ Vector Store удален: {vector_store_id}")
-    except Exception as e:
-        logger.error(f"⚠️ Ошибка при очистке ресурсов: {e}")
+    def _sync_cleanup():
+        try:
+            if assistant_id:
+                sync_client.beta.assistants.delete(assistant_id)
+                logger.info(f"🗑️ Assistant удален: {assistant_id}")
+            if vector_store_id:
+                sync_client.beta.vector_stores.delete(vector_store_id)
+                logger.info(f"🗑️ Vector Store удален: {vector_store_id}")
+        except Exception as e:
+            logger.error(f"⚠️ Ошибка при очистке ресурсов: {e}")
+
+    await asyncio.to_thread(_sync_cleanup)
 
 
 # ============================
