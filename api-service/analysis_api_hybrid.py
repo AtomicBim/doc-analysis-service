@@ -30,13 +30,13 @@ from config import (
     # Stage 2
     STAGE2_MAX_PAGES, STAGE2_DPI, STAGE2_QUALITY, STAGE2_DETAIL, STAGE2_MAX_PAGES_PER_REQUEST,
     # Stage 3
-    STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_TOKENS, STAGE3_RETRY_ON_REFUSAL, STAGE3_MAX_PAGES_PER_REQUEST,
+    STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_COMPLETION_TOKENS, STAGE3_RETRY_ON_REFUSAL, STAGE3_MAX_PAGES_PER_REQUEST,
     # Stage 4
-    STAGE4_ENABLED, STAGE4_SAMPLE_PAGES_PER_SECTION, STAGE4_DPI, STAGE4_QUALITY, STAGE4_DETAIL, STAGE4_MAX_TOKENS,
+    STAGE4_ENABLED, STAGE4_SAMPLE_PAGES_PER_SECTION, STAGE4_DPI, STAGE4_QUALITY, STAGE4_DETAIL, STAGE4_MAX_COMPLETION_TOKENS,
     # Retry
     RETRY_MAX_ATTEMPTS, RETRY_WAIT_EXPONENTIAL_MULTIPLIER, RETRY_WAIT_EXPONENTIAL_MAX,
     # OpenAI
-    OPENAI_MODEL, OPENAI_TEMPERATURE,
+    OPENAI_MODEL,
     # Logging
     LOG_LEVEL, LOG_RESPONSE_PREVIEW_LENGTH, LOG_FULL_RESPONSE_ON_ERROR
 )
@@ -58,7 +58,6 @@ if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is required")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-TEMPERATURE = OPENAI_TEMPERATURE
 MAX_FILE_SIZE_MB = 40
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
@@ -289,9 +288,8 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
                 response = await client.chat.completions.create(
                     model=OPENAI_MODEL,
                     messages=[{"role": "user", "content": content}],
-                    temperature=TEMPERATURE,
                     response_format={"type": "json_object"},
-                    max_tokens=4000
+                    max_completion_tokens=4000
                 )
 
                 data = json.loads(response.choices[0].message.content)
@@ -358,9 +356,8 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
         response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "user", "content": content}],
-            temperature=TEMPERATURE,
             response_format={"type": "json_object"},
-            max_tokens=4000
+            max_completion_tokens=4000
         )
 
         data = json.loads(response.choices[0].message.content)
@@ -507,9 +504,8 @@ async def _analyze_relevance_batch(
         response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "user", "content": content}],
-            temperature=TEMPERATURE,
             response_format={"type": "json_object"},
-            max_tokens=4000
+            max_completion_tokens=4000
         )
 
         data = json.loads(response.choices[0].message.content)
@@ -668,9 +664,8 @@ async def find_contradictions(
         response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "user", "content": content}],
-            temperature=TEMPERATURE,
             response_format={"type": "json_object"},
-            max_tokens=STAGE4_MAX_TOKENS
+            max_completion_tokens=STAGE4_MAX_COMPLETION_TOKENS
         )
 
         result = json.loads(response.choices[0].message.content)
@@ -870,9 +865,8 @@ async def analyze_batch_with_high_detail(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content}
             ],
-            temperature=TEMPERATURE,
             response_format={"type": "json_object"},  # Принудительный JSON
-            max_tokens=STAGE3_MAX_TOKENS
+            max_completion_tokens=STAGE3_MAX_COMPLETION_TOKENS
         )
 
         response_text = response.choices[0].message.content
@@ -1104,8 +1098,7 @@ async def extract_text_from_pdf(content: bytes, filename: str) -> str:
                         ]
                     }
                 ],
-                temperature=0.0,
-                max_tokens=4000
+                max_completion_tokens=4000
             )
 
             page_text = response.choices[0].message.content
@@ -1162,7 +1155,6 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
     response = await client.chat.completions.create(
         model=OPENAI_MODEL,  # Используем модель из конфига
         messages=[{"role": "user", "content": prompt}],
-        temperature=TEMPERATURE,
         response_format={"type": "json_object"}
     )
 
