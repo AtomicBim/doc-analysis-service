@@ -1135,7 +1135,12 @@ async def analyze_documentation(
         logger.info("📄 [STEP 1/4] Extracting text from TZ...")
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected during TZ extraction")
-            return {"error": "Client disconnected"}
+            return AnalysisResponse(
+                stage=stage,
+                req_type="ТЗ+ТУ" if check_tu else "ТЗ",
+                requirements=[],
+                summary="Анализ прерван: клиент отключился во время извлечения текста из ТЗ"
+            )
 
         tz_text = await extract_text_from_pdf(tz_content, tz_document.filename)
 
@@ -1150,7 +1155,12 @@ async def analyze_documentation(
         logger.info("✂️ [STEP 2/4] Segmenting requirements from TZ/TU...")
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected during segmentation")
-            return {"error": "Client disconnected"}
+            return AnalysisResponse(
+                stage=stage,
+                req_type="ТЗ+ТУ" if has_tu else "ТЗ",
+                requirements=[],
+                summary="Анализ прерван: клиент отключился во время сегментации требований"
+            )
 
         requirements = await segment_requirements(tz_text)
 
@@ -1208,7 +1218,13 @@ async def analyze_documentation(
         for group_idx, (pages_key, reqs_group) in enumerate(page_to_reqs.items(), 1):
             if await request.is_disconnected():
                 logger.warning(f"⚠️ Client disconnected at group {group_idx}/{len(page_to_reqs)}")
-                return {"error": "Client disconnected"}
+                # Возвращаем частичные результаты
+                return AnalysisResponse(
+                    stage=stage,
+                    req_type="ТЗ+ТУ" if has_tu else "ТЗ",
+                    requirements=analyzed_reqs,
+                    summary=f"Анализ прерван: клиент отключился после обработки {len(analyzed_reqs)}/{len(requirements)} требований (группа {group_idx}/{len(page_to_reqs)})"
+                )
 
             logger.info(f"📦 [STAGE 3] [{group_idx}/{len(page_to_reqs)}] Analyzing {len(reqs_group)} requirements on {len(pages_key)} pages")
 
@@ -1225,7 +1241,13 @@ async def analyze_documentation(
                 )
 
                 if not batch_results:
-                    return {"error": "Client disconnected"}
+                    # Клиент отключился во время batch анализа
+                    return AnalysisResponse(
+                        stage=stage,
+                        req_type="ТЗ+ТУ" if has_tu else "ТЗ",
+                        requirements=analyzed_reqs,
+                        summary=f"Анализ прерван: клиент отключился во время batch анализа. Обработано {len(analyzed_reqs)}/{len(requirements)} требований"
+                    )
 
                 analyzed_reqs.extend(batch_results)
 
@@ -1239,8 +1261,13 @@ async def analyze_documentation(
         logger.info("📝 Generating summary...")
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected before summary")
-            await cleanup_assistant_resources(assistant_id, file_id)
-            return {"error": "Client disconnected"}
+            # Возвращаем результаты без summary
+            return AnalysisResponse(
+                stage=stage,
+                req_type="ТЗ+ТУ" if has_tu else "ТЗ",
+                requirements=analyzed_reqs,
+                summary=f"Анализ завершен, но клиент отключился перед генерацией сводки. Проанализировано {len(analyzed_reqs)} требований."
+            )
 
         # Статистика для сводки
         total = len(analyzed_reqs)
