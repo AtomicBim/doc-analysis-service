@@ -20,7 +20,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 # ============================
@@ -40,14 +40,13 @@ if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is required")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-sync_client = OpenAI(api_key=OPENAI_API_KEY)  # Для Assistants API
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
 MAX_FILE_SIZE_MB = 40
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-logger.info(f"🚀 Используется OpenAI API (HYBRID MODE): {OPENAI_MODEL}")
-logger.info("📋 Архитектура: ТЗ/ТУ парсинг вручную + Чертежи через Assistants API")
+logger.info(f"🚀 Используется OpenAI API (VISION MODE): {OPENAI_MODEL}")
+logger.info("📋 Архитектура: ТЗ/ТУ парсинг вручную + Чертежи через Vision API")
 
 
 # ============================
@@ -105,48 +104,53 @@ PROMPTS = load_prompts()
 TU_PROMPTS = load_tu_prompts()
 
 # ============================
-# ASSISTANTS API ФУНКЦИИ
+# PDF PROCESSING ФУНКЦИИ
 # ============================
 
-async def upload_file_for_assistant(doc_content: bytes, filename: str) -> str:
+async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pages: int = 50) -> List[str]:
     """
-    Загружает PDF чертежей в OpenAI Files для использования с Assistants API.
-    Возвращает file_id.
+    Извлекает страницы PDF как base64-encoded изображения для Vision API.
+    Возвращает список base64 строк.
     """
-    logger.info(f"📤 Загрузка файла {filename} в OpenAI...")
+    logger.info(f"📄 Извлечение страниц из {filename} как изображений...")
 
-    def _sync_upload():
-        # Сохраняем временный файл
-        temp_file_path = f"/tmp/{filename}"
-        with open(temp_file_path, 'wb') as f:
-            f.write(doc_content)
+    def _extract():
+        import base64
+        from PIL import Image
+        import io
 
-        try:
-            # Загружаем файл в OpenAI
-            with open(temp_file_path, 'rb') as file_stream:
-                uploaded_file = sync_client.files.create(
-                    file=file_stream,
-                    purpose="assistants"
-                )
+        doc = fitz.open(stream=doc_content, filetype="pdf")
+        images = []
 
-            logger.info(f"✅ Файл загружен: {uploaded_file.id}")
-            return uploaded_file.id
-        finally:
-            # Удаляем временный файл
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+        total_pages = min(len(doc), max_pages)
+        logger.info(f"📄 Обрабатываем {total_pages} страниц из {len(doc)}")
 
-    return await asyncio.to_thread(_sync_upload)
+        for page_num in range(total_pages):
+            page = doc[page_num]
+            # Рендерим страницу в изображение (150 DPI для хорошего качества)
+            pix = page.get_pixmap(dpi=150)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            # Конвертируем в base64
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=85)
+            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+            images.append(base64_image)
+
+        doc.close()
+        logger.info(f"✅ Извлечено {len(images)} страниц")
+        return images
+
+    return await asyncio.to_thread(_extract)
 
 
-async def create_analysis_assistant(stage: str, req_type: str) -> str:
+def get_analysis_system_prompt(stage: str, req_type: str) -> str:
     """
-    Создает Assistant для анализа документации.
-    Возвращает assistant_id.
+    Возвращает system prompt для анализа документации.
     """
     stage_prompt = PROMPTS.get(stage, PROMPTS["ФЭ"])
 
-    instructions = f"""{stage_prompt}
+    return f"""{stage_prompt}
 
 Ты — эксперт по анализу строительной документации. Твоя задача:
 
@@ -166,35 +170,22 @@ async def create_analysis_assistant(stage: str, req_type: str) -> str:
 }}
 
 ВАЖНО:
-- Используй File Search для поиска релевантных частей чертежей
+- Внимательно изучи все предоставленные страницы чертежей
 - Указывай КОНКРЕТНЫЕ ссылки (номера листов, разделы, страницы)
 - Анализируй как текст, так и графические элементы на чертежах
 - Если не нашел информацию, указывай status="Требует уточнения"
 - Возвращай ТОЛЬКО JSON, без дополнительных пояснений
 """
 
-    def _sync_create():
-        assistant = sync_client.beta.assistants.create(
-            name=f"Document Analyzer - {stage}",
-            instructions=instructions,
-            model=OPENAI_MODEL,
-            tools=[{"type": "file_search"}],
-            temperature=TEMPERATURE
-        )
-        logger.info(f"🤖 Assistant создан: {assistant.id}")
-        return assistant.id
 
-    return await asyncio.to_thread(_sync_create)
-
-
-async def analyze_requirement_with_assistant(
-    assistant_id: str,
-    file_id: str,
+async def analyze_requirement_with_vision(
+    system_prompt: str,
+    doc_images: List[str],
     requirement: Dict[str, Any],
     request: Request
 ) -> Optional['RequirementAnalysis']:
     """
-    Анализирует одно требование через Assistants API с файлом чертежей.
+    Анализирует одно требование через Vision API с изображениями чертежей.
     Возвращает RequirementAnalysis или None при отключении клиента.
     """
     if await request.is_disconnected():
@@ -203,91 +194,50 @@ async def analyze_requirement_with_assistant(
 
     logger.info(f"🔍 Анализ требования {requirement['trace_id']}...")
 
-    def _sync_analyze():
-        # Создаем Thread с прикрепленным файлом
-        thread = sync_client.beta.threads.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"""Проанализируй следующее требование из ТЗ:
+    # Формируем content для Vision API
+    content = [
+        {
+            "type": "text",
+            "text": f"""Проанализируй следующее требование из ТЗ:
 
 Номер: {requirement.get('number')}
 Раздел: {requirement.get('section', 'Общие требования')}
 Требование: {requirement['text']}
 
 Найди в проектной документации (чертежах), как это требование выполнено.
-Верни результат СТРОГО в JSON формате без дополнительного текста.""",
-                    "attachments": [
-                        {
-                            "file_id": file_id,
-                            "tools": [{"type": "file_search"}]
-                        }
-                    ]
-                }
-            ]
-        )
+Верни результат СТРОГО в JSON формате без дополнительного текста."""
+        }
+    ]
 
-        # Запускаем Assistant
-        run = sync_client.beta.threads.runs.create_and_poll(
-            thread_id=thread.id,
-            assistant_id=assistant_id,
-            timeout=300  # 5 минут на анализ одного требования
-        )
+    # Добавляем изображения чертежей
+    for idx, base64_image in enumerate(doc_images, 1):
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{base64_image}",
+                "detail": "high"  # Высокое качество для детального анализа
+            }
+        })
 
-        if run.status != 'completed':
-            logger.error(f"❌ Run failed for {requirement['trace_id']}: {run.status}")
-            return RequirementAnalysis(
-                number=requirement.get('number', 0),
-                requirement=requirement['text'],
-                status="Требует уточнения",
-                confidence=0,
-                solution_description="Ошибка анализа",
-                reference="-",
-                discrepancies=f"Assistant run status: {run.status}",
-                recommendations="Повторите анализ",
-                section=requirement.get('section'),
-                trace_id=requirement['trace_id']
-            )
-
-        # Получаем ответ
-        messages = sync_client.beta.threads.messages.list(thread_id=thread.id, order="desc", limit=1)
-        return messages.data[0]
-
-    assistant_message = await asyncio.to_thread(_sync_analyze)
-
-    # Если вернулся RequirementAnalysis (ошибка), возвращаем его
-    if isinstance(assistant_message, RequirementAnalysis):
-        return assistant_message
-
-    # Извлекаем текст ответа
-    response_text = ""
-    for content_block in assistant_message.content:
-        if content_block.type == 'text':
-            response_text += content_block.text.value
-
-    # Извлекаем citations для ссылок
-    citations = []
-    if hasattr(assistant_message.content[0], 'text') and hasattr(assistant_message.content[0].text, 'annotations'):
-        for annotation in assistant_message.content[0].text.annotations:
-            if hasattr(annotation, 'file_citation'):
-                citations.append({
-                    'file_id': annotation.file_citation.file_id,
-                    'quote': annotation.file_citation.quote
-                })
-
-    # Парсим JSON из ответа
     try:
-        # Ищем JSON в ответе
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content}
+            ],
+            temperature=TEMPERATURE,
+            max_tokens=2000
+        )
+
+        response_text = response.choices[0].message.content
+
+        # Парсим JSON из ответа
         json_start = response_text.find('{')
         json_end = response_text.rfind('}') + 1
         if json_start != -1 and json_end > json_start:
             json_str = response_text[json_start:json_end]
             data = json.loads(json_str)
-
-            # Добавляем citations в reference если есть
-            if citations:
-                citation_text = " | ".join([f"Цитата: {c['quote'][:100]}..." for c in citations[:2]])
-                data['reference'] = f"{data.get('reference', '-')} {citation_text}"
 
             return RequirementAnalysis(
                 **data,
@@ -296,37 +246,35 @@ async def analyze_requirement_with_assistant(
             )
         else:
             raise ValueError("No JSON found in response")
+
     except (json.JSONDecodeError, ValidationError) as e:
-        logger.error(f"❌ Failed to parse assistant response for {requirement['trace_id']}: {e}")
-        logger.error(f"Response was: {response_text[:500]}")
+        logger.error(f"❌ Failed to parse response for {requirement['trace_id']}: {e}")
         return RequirementAnalysis(
             number=requirement.get('number', 0),
             requirement=requirement['text'],
             status="Требует уточнения",
             confidence=50,
-            solution_description=response_text[:200] if response_text else "Не удалось получить ответ",
-            reference="; ".join([c['quote'][:50] for c in citations]) if citations else "-",
-            discrepancies="Ошибка парсинга ответа ассистента",
+            solution_description="Не удалось получить ответ",
+            reference="-",
+            discrepancies="Ошибка парсинга ответа",
             recommendations="Проверьте вручную",
             section=requirement.get('section'),
             trace_id=requirement['trace_id']
         )
-
-
-async def cleanup_assistant_resources(assistant_id: Optional[str], file_id: Optional[str]):
-    """Удаляет временные ресурсы Assistants API."""
-    def _sync_cleanup():
-        try:
-            if assistant_id:
-                sync_client.beta.assistants.delete(assistant_id)
-                logger.info(f"🗑️ Assistant удален: {assistant_id}")
-            if file_id:
-                sync_client.files.delete(file_id)
-                logger.info(f"🗑️ Файл удален: {file_id}")
-        except Exception as e:
-            logger.error(f"⚠️ Ошибка при очистке ресурсов: {e}")
-
-    await asyncio.to_thread(_sync_cleanup)
+    except Exception as e:
+        logger.error(f"❌ Error analyzing {requirement['trace_id']}: {e}")
+        return RequirementAnalysis(
+            number=requirement.get('number', 0),
+            requirement=requirement['text'],
+            status="Требует уточнения",
+            confidence=0,
+            solution_description="Ошибка анализа",
+            reference="-",
+            discrepancies=str(e),
+            recommendations="Повторите анализ",
+            section=requirement.get('section'),
+            trace_id=requirement['trace_id']
+        )
 
 
 # ============================
@@ -474,9 +422,9 @@ class AnalysisResponse(BaseModel):
 # ============================
 
 app = FastAPI(
-    title="Document Analysis API (Hybrid)",
-    description="API для анализа строительной документации с использованием гибридного подхода",
-    version="5.0.0-hybrid"
+    title="Document Analysis API (Vision Mode)",
+    description="API для анализа строительной документации с использованием Vision API",
+    version="6.0.0-vision"
 )
 
 app.add_middleware(
@@ -497,8 +445,8 @@ async def root():
     """Health check"""
     return {
         "status": "ok",
-        "service": "Document Analysis API (HYBRID)",
-        "architecture": "TZ/TU manual parsing + Drawings via Assistants API",
+        "service": "Document Analysis API (VISION MODE)",
+        "architecture": "TZ/TU manual parsing + Drawings via Vision API",
         "provider": "openai",
         "model": OPENAI_MODEL,
         "max_file_size_mb": MAX_FILE_SIZE_MB
@@ -518,11 +466,8 @@ async def analyze_documentation(
     """
     Гибридный анализ документации:
     - ТЗ/ТУ: ручной парсинг и сегментация
-    - Чертежи: Assistants API с File Search
+    - Чертежи: Vision API для анализа страниц
     """
-    assistant_id = None
-    file_id = None
-
     try:
         # Проверяем, не отключился ли клиент
         if await request.is_disconnected():
@@ -591,47 +536,44 @@ async def analyze_documentation(
         logger.info(f"✅ Extracted {len(requirements)} requirements")
 
         # ============================================================
-        # ЭТАП 2: Загрузка чертежей в OpenAI Files
+        # ЭТАП 2: Конвертация чертежей в изображения
         # ============================================================
 
-        logger.info("📤 [STEP 3/4] Uploading project documentation...")
+        logger.info("📤 [STEP 3/4] Converting project documentation to images...")
         if await request.is_disconnected():
-            logger.warning("⚠️ Client disconnected before upload")
+            logger.warning("⚠️ Client disconnected before conversion")
             return {"error": "Client disconnected"}
 
-        file_id = await upload_file_for_assistant(doc_content, doc_document.filename)
+        doc_images = await extract_pdf_pages_as_images(doc_content, doc_document.filename)
 
         # ============================================================
-        # ЭТАП 3: Создание Assistant для анализа
+        # ЭТАП 3: Подготовка system prompt
         # ============================================================
 
-        logger.info("🤖 Creating Assistant for analysis...")
-        assistant_id = await create_analysis_assistant(stage, "ТЗ+ТУ" if has_tu else "ТЗ")
+        system_prompt = get_analysis_system_prompt(stage, "ТЗ+ТУ" if has_tu else "ТЗ")
 
         # ============================================================
-        # ЭТАП 4: Анализ каждого требования через Assistant
+        # ЭТАП 4: Анализ каждого требования через Vision API
         # ============================================================
 
-        logger.info(f"🔍 [STEP 4/4] Analyzing {len(requirements)} requirements with Assistants API...")
+        logger.info(f"🔍 [STEP 4/4] Analyzing {len(requirements)} requirements with Vision API...")
         analyzed_reqs = []
 
         for idx, req in enumerate(requirements, 1):
             if await request.is_disconnected():
                 logger.warning(f"⚠️ Client disconnected at requirement {idx}/{len(requirements)}")
-                await cleanup_assistant_resources(assistant_id, file_id)
                 return {"error": "Client disconnected"}
 
             logger.info(f"🔍 [{idx}/{len(requirements)}] Analyzing: {req.get('trace_id')}")
 
-            result = await analyze_requirement_with_assistant(
-                assistant_id=assistant_id,
-                file_id=file_id,
+            result = await analyze_requirement_with_vision(
+                system_prompt=system_prompt,
+                doc_images=doc_images,
                 requirement=req,
                 request=request
             )
 
             if result is None:  # Client disconnected
-                await cleanup_assistant_resources(assistant_id, file_id)
                 return {"error": "Client disconnected"}
 
             analyzed_reqs.append(result)
@@ -664,10 +606,8 @@ async def analyze_documentation(
 Средняя достоверность: {sum(r.confidence for r in analyzed_reqs)/total:.1f}%"""
 
         # ============================================================
-        # Cleanup и возврат результата
+        # Возврат результата
         # ============================================================
-
-        await cleanup_assistant_resources(assistant_id, file_id)
 
         parsed_result = AnalysisResponse(
             stage=stage,
@@ -680,11 +620,9 @@ async def analyze_documentation(
         return parsed_result
 
     except HTTPException:
-        await cleanup_assistant_resources(assistant_id, file_id)
         raise
     except Exception as e:
         logger.error(f"❌ [HYBRID] Ошибка при анализе: {e}", exc_info=True)
-        await cleanup_assistant_resources(assistant_id, file_id)
         raise HTTPException(status_code=500, detail=f"Ошибка анализа: {str(e)}")
 
 
