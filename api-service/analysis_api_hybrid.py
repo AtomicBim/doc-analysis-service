@@ -1160,7 +1160,7 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
 {tz_text[:10000]}"""  # Ограничиваем до 10000 символов
 
     response = await client.chat.completions.create(
-        model="gpt-4o-mini",  # Дешевая модель для сегментации
+        model=OPENAI_MODEL,  # Используем модель из конфига
         messages=[{"role": "user", "content": prompt}],
         temperature=TEMPERATURE,
         response_format={"type": "json_object"}
