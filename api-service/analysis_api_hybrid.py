@@ -321,20 +321,69 @@ async def cleanup_assistant_resources(assistant_id: Optional[str], vector_store_
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 async def extract_text_from_pdf(content: bytes, filename: str) -> str:
-    """Извлекает текст из PDF. Простой парсинг без OCR."""
+    """Извлекает текст из PDF. Использует OCR если нет текстового слоя."""
+    import base64
+    from PIL import Image
+    import io
+
     text = ""
     doc = fitz.open(stream=content, filetype="pdf")
+    is_scanned = True
 
+    # Сначала пробуем извлечь текст напрямую
     for page in doc:
         page_text = page.get_text()
         if page_text.strip():
+            is_scanned = False
             text += page_text + "\n\n"
+
+    # Если текста нет - используем OCR через OpenAI Vision
+    if is_scanned or not text.strip():
+        logger.warning(f"⚠️ Файл {filename} отсканирован, применяем OCR через OpenAI Vision...")
+
+        for page_num, page in enumerate(doc):
+            # Рендерим страницу в изображение
+            pix = page.get_pixmap(dpi=150)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            # Конвертируем в base64
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=85)
+            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+
+            # OCR через Vision
+            logger.info(f"📄 OCR страницы {page_num + 1}/{len(doc)} из {filename}")
+            response = await client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Извлеки весь текст с этого изображения. Сохрани структуру, номера пунктов, таблицы. Верни только текст без комментариев."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                            }
+                        ]
+                    }
+                ],
+                temperature=0.0,
+                max_tokens=4000
+            )
+
+            page_text = response.choices[0].message.content
+            text += f"\n\n--- Страница {page_num + 1} ---\n\n{page_text}"
+
+        logger.info(f"✅ OCR завершен для {filename}, извлечено {len(text)} символов")
 
     doc.close()
 
     if not text.strip():
-        logger.warning(f"⚠️ Файл {filename} не содержит текста (возможно, отсканированный)")
-        return f"[Документ {filename} не содержит извлекаемого текста]"
+        logger.error(f"❌ Не удалось извлечь текст из {filename}")
+        return "[Документ пуст или не удалось распознать текст]"
 
     return text.strip()
 
