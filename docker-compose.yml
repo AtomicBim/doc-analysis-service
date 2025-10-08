@@ -23,7 +23,7 @@ services:
     networks:
       - doc-analysis-net
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -45,7 +45,7 @@ services:
     depends_on:
       - doc-analysis-api
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:7861/')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7861/')"]
       interval: 30s
       timeout: 10s
       retries: 3
