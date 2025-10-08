@@ -107,12 +107,16 @@ TU_PROMPTS = load_tu_prompts()
 # PDF PROCESSING ФУНКЦИИ
 # ============================
 
-async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pages: int = 20) -> List[str]:
+async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pages: int = 150, detail: str = "low", dpi: int = 100, quality: int = 70) -> List[str]:
     """
     Извлекает страницы PDF как base64-encoded изображения для Vision API.
-    Возвращает список base64 строк.
+
+    Args:
+        detail: "low" (85 tokens/img) или "high" (765 tokens/img)
+        dpi: качество рендеринга (100 для low, 150 для high)
+        quality: JPEG качество (70 для low, 85 для high)
     """
-    logger.info(f"📄 Извлечение страниц из {filename} как изображений...")
+    logger.info(f"📄 [IMG] Извлечение страниц из {filename} (detail={detail}, dpi={dpi}, quality={quality})...")
 
     def _extract():
         import base64
@@ -123,25 +127,235 @@ async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pag
         images = []
 
         total_pages = min(len(doc), max_pages)
-        logger.info(f"📄 Обрабатываем {total_pages} страниц из {len(doc)}")
+        logger.info(f"📄 [IMG] Обрабатываем {total_pages} страниц из {len(doc)}")
 
         for page_num in range(total_pages):
             page = doc[page_num]
-            # Рендерим страницу в изображение (100 DPI для оптимального баланса)
-            pix = page.get_pixmap(dpi=100)
+            pix = page.get_pixmap(dpi=dpi)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-            # Конвертируем в base64 (quality=70 для экономии токенов)
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=70)
+            img.save(img_byte_arr, format='JPEG', quality=quality)
             base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
             images.append(base64_image)
 
         doc.close()
-        logger.info(f"✅ Извлечено {len(images)} страниц")
+        logger.info(f"✅ [IMG] Извлечено {len(images)} страниц")
         return images
 
     return await asyncio.to_thread(_extract)
+
+
+async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: int = 150) -> List[Dict[str, Any]]:
+    """
+    Stage 1: Извлекает метаданные страниц (штамп, заголовки) через Vision API.
+    Фокус на правый нижний угол (штамп), правый верхний, заголовки.
+    """
+    logger.info(f"📋 [STAGE 1] Извлечение метаданных из {filename}...")
+
+    def _extract_crops():
+        import base64
+        from PIL import Image
+        import io
+
+        doc = fitz.open(stream=doc_content, filetype="pdf")
+        metadata_images = []
+
+        total_pages = min(len(doc), max_pages)
+
+        for page_num in range(total_pages):
+            page = doc[page_num]
+            pix = page.get_pixmap(dpi=100)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            # Вырезаем ключевые области для быстрого анализа
+            width, height = img.size
+
+            # Правый нижний угол (штамп) - 30% ширины, 20% высоты
+            stamp_crop = img.crop((int(width * 0.7), int(height * 0.8), width, height))
+
+            # Правый верхний угол - 30% ширины, 15% высоты
+            top_right_crop = img.crop((int(width * 0.7), 0, width, int(height * 0.15)))
+
+            # Заголовок (верхняя часть) - 100% ширины, 10% высоты
+            header_crop = img.crop((0, 0, width, int(height * 0.1)))
+
+            # Объединяем в одно изображение для компактности
+            combined = Image.new('RGB', (width, int(height * 0.45)))
+            combined.paste(header_crop, (0, 0))
+            combined.paste(top_right_crop, (int(width * 0.7), int(height * 0.1)))
+            combined.paste(stamp_crop, (int(width * 0.7), int(height * 0.25)))
+
+            img_byte_arr = io.BytesIO()
+            combined.save(img_byte_arr, format='JPEG', quality=70)
+            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+            metadata_images.append({
+                'page_number': page_num + 1,
+                'image': base64_image
+            })
+
+        doc.close()
+        logger.info(f"✅ [STAGE 1] Извлечено метаданных с {len(metadata_images)} страниц")
+        return metadata_images
+
+    crops = await asyncio.to_thread(_extract_crops)
+
+    # Формируем запрос к GPT для извлечения метаданных
+    logger.info(f"🔍 [STAGE 1] Анализ метаданных через Vision API...")
+
+    content = [{
+        "type": "text",
+        "text": """Проанализируй метаданные строительных чертежей.
+Для каждой страницы извлеки:
+- Название листа/раздела (из заголовка или штампа)
+- Раздел проекта (АР, КР, ИС, ОВ, ВК, ЭС и т.д.)
+- Тип чертежа (план, разрез, схема, спецификация)
+- Номер листа
+
+ВАЖНО: Обрати особое внимание на:
+- Правый нижний угол (штамп документации)
+- Правый верхний угол
+- Заголовки и названия листов
+
+Верни JSON:
+{
+  "pages": [
+    {"page": 1, "title": "План 1 этажа", "section": "АР", "type": "план", "sheet_number": "АР-01"},
+    {"page": 2, "title": "Схема электроснабжения", "section": "ЭС", "type": "схема", "sheet_number": "ЭС-03"}
+  ]
+}"""
+    }]
+
+    # Добавляем изображения метаданных
+    for item in crops:
+        content.append({
+            "type": "text",
+            "text": f"\n--- Страница {item['page_number']} ---"
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{item['image']}",
+                "detail": "low"
+            }
+        })
+
+    try:
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": content}],
+            temperature=TEMPERATURE,
+            response_format={"type": "json_object"},
+            max_tokens=4000
+        )
+
+        data = json.loads(response.choices[0].message.content)
+        pages_metadata = data.get('pages', [])
+        logger.info(f"✅ [STAGE 1] Извлечено метаданных для {len(pages_metadata)} страниц")
+        return pages_metadata
+
+    except Exception as e:
+        logger.error(f"❌ [STAGE 1] Ошибка извлечения метаданных: {e}")
+        # Fallback: возвращаем пустые метаданные
+        return [{"page": i+1, "title": f"Страница {i+1}", "section": "Unknown", "type": "unknown", "sheet_number": f"{i+1}"}
+                for i in range(len(crops))]
+
+
+async def assess_page_relevance(
+    pages_metadata: List[Dict[str, Any]],
+    doc_images_low: List[str],
+    requirements: List[Dict[str, Any]]
+) -> Dict[int, List[int]]:
+    """
+    Stage 2: Оценка релевантности страниц для каждого требования.
+    Возвращает mapping: {requirement_number: [page_numbers]}
+    """
+    logger.info(f"🔍 [STAGE 2] Оценка релевантности {len(pages_metadata)} страниц для {len(requirements)} требований...")
+
+    # Формируем описание страниц
+    pages_description = "\n".join([
+        f"Страница {p['page']}: {p.get('title', 'N/A')} [{p.get('section', 'N/A')}] - {p.get('type', 'N/A')}"
+        for p in pages_metadata
+    ])
+
+    # Формируем список требований
+    requirements_text = "\n".join([
+        f"{req['number']}. [{req.get('section', 'Общие')}] {req['text'][:200]}..."
+        for req in requirements
+    ])
+
+    content = [{
+        "type": "text",
+        "text": f"""Ты эксперт по строительной документации.
+
+Перед тобой {len(doc_images_low)} страниц проектной документации в НИЗКОМ разрешении.
+Твоя задача: определить, какие страницы содержат информацию для проверки каждого требования.
+
+МЕТАДАННЫЕ СТРАНИЦ:
+{pages_description}
+
+ТРЕБОВАНИЯ ИЗ ТЗ:
+{requirements_text}
+
+ВАЖНО при анализе изображений:
+- Правый нижний угол (штамп) - номера листов, разделы
+- Правый верхний угол - дополнительная маркировка
+- Заголовки - названия планов, схем, разрезов
+
+Верни JSON:
+{{
+  "page_mapping": [
+    {{"requirement_number": 1, "relevant_pages": [3, 15, 22], "reason": "План этажей с отметками высот"}},
+    {{"requirement_number": 2, "relevant_pages": [45, 46], "reason": "Схема вентиляции раздел ОВ"}}
+  ]
+}}
+
+Для каждого требования укажи ВСЕ релевантные страницы. Если не уверен - лучше включить лишнюю страницу."""
+    }]
+
+    # Добавляем изображения в низком качестве
+    for idx, base64_image in enumerate(doc_images_low, 1):
+        content.append({
+            "type": "text",
+            "text": f"\n--- Страница {idx} ---"
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{base64_image}",
+                "detail": "low"
+            }
+        })
+
+    try:
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": content}],
+            temperature=TEMPERATURE,
+            response_format={"type": "json_object"},
+            max_tokens=4000
+        )
+
+        data = json.loads(response.choices[0].message.content)
+        page_mapping_list = data.get('page_mapping', [])
+
+        # Преобразуем в словарь {requirement_number: [pages]}
+        page_mapping = {}
+        for item in page_mapping_list:
+            req_num = item.get('requirement_number')
+            pages = item.get('relevant_pages', [])
+            reason = item.get('reason', '')
+            page_mapping[req_num] = pages
+            logger.info(f"📄 [STAGE 2] Req {req_num}: страницы {pages} ({reason})")
+
+        logger.info(f"✅ [STAGE 2] Построен mapping для {len(page_mapping)} требований")
+        return page_mapping
+
+    except Exception as e:
+        logger.error(f"❌ [STAGE 2] Ошибка оценки релевантности: {e}")
+        # Fallback: все страницы для всех требований
+        logger.warning("⚠️ [STAGE 2] Используем fallback - все страницы для всех требований")
+        return {req['number']: list(range(1, len(doc_images_low) + 1)) for req in requirements}
 
 
 def get_analysis_system_prompt(stage: str, req_type: str) -> str:
@@ -176,6 +390,177 @@ def get_analysis_system_prompt(stage: str, req_type: str) -> str:
 - Если не нашел информацию, указывай status="Требует уточнения"
 - Возвращай ТОЛЬКО JSON, без дополнительных пояснений
 """
+
+
+async def analyze_batch_with_high_detail(
+    system_prompt: str,
+    doc_content: bytes,
+    page_numbers: List[int],
+    requirements_batch: List[Dict[str, Any]],
+    request: Request
+) -> List['RequirementAnalysis']:
+    """
+    Stage 3: Детальный анализ пакета требований с ВЫСОКИМ разрешением релевантных страниц.
+    """
+    if await request.is_disconnected():
+        logger.warning(f"⚠️ [STAGE 3] Client disconnected")
+        return []
+
+    batch_ids = [req['trace_id'] for req in requirements_batch]
+    logger.info(f"🔍 [STAGE 3] Анализ {len(requirements_batch)} требований на страницах {page_numbers[:5]}{'...' if len(page_numbers) > 5 else ''}")
+
+    # Извлекаем только релевантные страницы в высоком качестве
+    logger.info(f"📄 [STAGE 3] Извлечение {len(page_numbers)} страниц в высоком качестве...")
+
+    def _extract_pages():
+        import base64
+        from PIL import Image
+        import io
+
+        doc = fitz.open(stream=doc_content, filetype="pdf")
+        images = []
+
+        for page_num in page_numbers:
+            if page_num < 1 or page_num > len(doc):
+                continue
+            page = doc[page_num - 1]  # page_num начинается с 1
+            pix = page.get_pixmap(dpi=150)  # Высокое качество
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=85)  # Высокое качество
+            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+            images.append(base64_image)
+
+        doc.close()
+        logger.info(f"✅ [STAGE 3] Извлечено {len(images)} страниц в высоком качестве")
+        return images
+
+    doc_images_high = await asyncio.to_thread(_extract_pages)
+
+    # Формируем список требований
+    requirements_text = "\n\n".join([
+        f"Требование {req['number']} [{req.get('section', 'Общие')}]:\n{req['text']}"
+        for req in requirements_batch
+    ])
+
+    content = [{
+        "type": "text",
+        "text": f"""Проанализируй следующие требования из ТЗ и найди для КАЖДОГО требования решение в проектной документации.
+
+{requirements_text}
+
+Верни результат СТРОГО в JSON формате:
+{{
+  "analyses": [
+    {{
+      "number": <номер требования>,
+      "requirement": "<текст требования>",
+      "status": "<Полностью исполнено|Частично исполнено|Не исполнено|Требует уточнения>",
+      "confidence": <0-100>,
+      "solution_description": "<описание>",
+      "reference": "<конкретная ссылка: номер листа, раздел, страница>",
+      "discrepancies": "<несоответствия или '-'>",
+      "recommendations": "<рекомендации или '-'>"
+    }}
+  ]
+}}
+
+ВАЖНО: Верни анализ для ВСЕХ {len(requirements_batch)} требований в том же порядке!
+Изображения в ВЫСОКОМ разрешении - изучай детали, текст, размеры, маркировку."""
+    }]
+
+    # Добавляем изображения в высоком качестве
+    for idx, base64_image in enumerate(doc_images_high, 1):
+        page_num = page_numbers[idx - 1] if idx <= len(page_numbers) else idx
+        content.append({
+            "type": "text",
+            "text": f"\n--- Страница {page_num} ---"
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{base64_image}",
+                "detail": "high"  # Высокое качество
+            }
+        })
+
+    try:
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content}
+            ],
+            temperature=TEMPERATURE,
+            max_tokens=4000
+        )
+
+        response_text = response.choices[0].message.content
+
+        # Парсим JSON
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
+        if json_start != -1 and json_end > json_start:
+            json_str = response_text[json_start:json_end]
+            data = json.loads(json_str)
+
+            analyses = data.get('analyses', [])
+            req_map = {req['number']: req for req in requirements_batch}
+
+            results = []
+            for analysis in analyses:
+                req_num = analysis.get('number')
+                if req_num in req_map:
+                    req = req_map[req_num]
+                    results.append(RequirementAnalysis(
+                        **analysis,
+                        section=req.get('section'),
+                        trace_id=req['trace_id']
+                    ))
+
+            logger.info(f"✅ [STAGE 3] Проанализировано {len(results)}/{len(requirements_batch)} требований")
+
+            # Добавляем заглушки для пропущенных
+            if len(results) < len(requirements_batch):
+                analyzed_numbers = {r.number for r in results}
+                for req in requirements_batch:
+                    if req['number'] not in analyzed_numbers:
+                        results.append(RequirementAnalysis(
+                            number=req['number'],
+                            requirement=req['text'],
+                            status="Требует уточнения",
+                            confidence=0,
+                            solution_description="Не проанализировано",
+                            reference="-",
+                            discrepancies="Отсутствует в ответе модели",
+                            recommendations="Повторите анализ",
+                            section=req.get('section'),
+                            trace_id=req['trace_id']
+                        ))
+
+            results.sort(key=lambda r: r.number)
+            return results
+        else:
+            raise ValueError("No JSON found in response")
+
+    except Exception as e:
+        logger.error(f"❌ [STAGE 3] Ошибка анализа: {e}")
+        return [
+            RequirementAnalysis(
+                number=req['number'],
+                requirement=req['text'],
+                status="Требует уточнения",
+                confidence=0,
+                solution_description="Ошибка анализа",
+                reference="-",
+                discrepancies=str(e),
+                recommendations="Повторите анализ",
+                section=req.get('section'),
+                trace_id=req['trace_id']
+            )
+            for req in requirements_batch
+        ]
 
 
 @retry(
@@ -675,26 +1060,23 @@ async def analyze_documentation(
         logger.info(f"✅ Extracted {len(requirements)} requirements")
 
         # ============================================================
-        # ЭТАП 2: Классификация требований на пакеты
+        # ЭТАП 2 [STAGE 1]: Извлечение метаданных страниц
         # ============================================================
 
-        logger.info("📦 [STEP 2.5/5] Classifying requirements into batches...")
-        if await request.is_disconnected():
-            logger.warning("⚠️ Client disconnected before classification")
-            return {"error": "Client disconnected"}
-
-        batches = await classify_requirements_into_batches(requirements)
+        logger.info("📋 [STEP 3/7] STAGE 1: Extracting page metadata...")
+        pages_metadata = await extract_page_metadata(doc_content, doc_document.filename, max_pages=150)
 
         # ============================================================
-        # ЭТАП 3: Конвертация чертежей в изображения
+        # ЭТАП 3 [STAGE 2]: Конвертация в низкое качество и оценка релевантности
         # ============================================================
 
-        logger.info("📤 [STEP 3/5] Converting project documentation to images...")
-        if await request.is_disconnected():
-            logger.warning("⚠️ Client disconnected before conversion")
-            return {"error": "Client disconnected"}
+        logger.info("📤 [STEP 4/7] STAGE 2: Converting to low-res and assessing relevance...")
+        doc_images_low = await extract_pdf_pages_as_images(
+            doc_content, doc_document.filename,
+            max_pages=150, detail="low", dpi=100, quality=70
+        )
 
-        doc_images = await extract_pdf_pages_as_images(doc_content, doc_document.filename)
+        page_mapping = await assess_page_relevance(pages_metadata, doc_images_low, requirements)
 
         # ============================================================
         # ЭТАП 4: Подготовка system prompt
@@ -703,30 +1085,50 @@ async def analyze_documentation(
         system_prompt = get_analysis_system_prompt(stage, "ТЗ+ТУ" if has_tu else "ТЗ")
 
         # ============================================================
-        # ЭТАП 5: Пакетный анализ требований через Vision API
+        # ЭТАП 5 [STAGE 3]: Группировка и анализ с высоким разрешением
         # ============================================================
 
-        logger.info(f"🔍 [STEP 4/5] Analyzing {len(requirements)} requirements in {len(batches)} batches with Vision API...")
+        logger.info(f"🔍 [STEP 5/7] STAGE 3: Analyzing with high-resolution images...")
         analyzed_reqs = []
 
-        for batch_idx, batch in enumerate(batches, 1):
+        # Группируем требования по общим страницам для оптимизации
+        from collections import defaultdict
+        page_to_reqs = defaultdict(list)
+
+        for req in requirements:
+            req_pages = page_mapping.get(req['number'], [])
+            if not req_pages:  # Fallback - первые 20 страниц
+                req_pages = list(range(1, min(21, len(doc_images_low) + 1)))
+
+            pages_key = tuple(sorted(req_pages))
+            page_to_reqs[pages_key].append(req)
+
+        logger.info(f"📦 [STAGE 3] Создано {len(page_to_reqs)} групп по общим страницам")
+
+        for group_idx, (pages_key, reqs_group) in enumerate(page_to_reqs.items(), 1):
             if await request.is_disconnected():
-                logger.warning(f"⚠️ Client disconnected at batch {batch_idx}/{len(batches)}")
+                logger.warning(f"⚠️ Client disconnected at group {group_idx}/{len(page_to_reqs)}")
                 return {"error": "Client disconnected"}
 
-            logger.info(f"📦 [{batch_idx}/{len(batches)}] Analyzing batch of {len(batch)} requirements")
+            logger.info(f"📦 [STAGE 3] [{group_idx}/{len(page_to_reqs)}] Analyzing {len(reqs_group)} requirements on {len(pages_key)} pages")
 
-            batch_results = await analyze_batch_with_vision(
-                system_prompt=system_prompt,
-                doc_images=doc_images,
-                requirements_batch=batch,
-                request=request
-            )
+            # Разбиваем на пакеты по 3-5 требований если группа большая
+            batch_size = 4
+            for batch_start in range(0, len(reqs_group), batch_size):
+                batch = reqs_group[batch_start:batch_start + batch_size]
 
-            if not batch_results:  # Client disconnected
-                return {"error": "Client disconnected"}
+                batch_results = await analyze_batch_with_high_detail(
+                    system_prompt=system_prompt,
+                    doc_content=doc_content,
+                    page_numbers=list(pages_key),
+                    requirements_batch=batch,
+                    request=request
+                )
 
-            analyzed_reqs.extend(batch_results)
+                if not batch_results:
+                    return {"error": "Client disconnected"}
+
+                analyzed_reqs.extend(batch_results)
 
         # Сортируем по исходному порядку из ТЗ
         analyzed_reqs.sort(key=lambda r: r.number)
