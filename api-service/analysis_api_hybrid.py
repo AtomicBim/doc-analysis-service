@@ -498,6 +498,14 @@ async def analyze_batch_with_high_detail(
         )
 
         response_text = response.choices[0].message.content
+
+        # Проверка на None
+        if response_text is None:
+            logger.error(f"❌ [STAGE 3] Response content is None!")
+            logger.error(f"Full response object: {response}")
+            logger.error(f"Finish reason: {response.choices[0].finish_reason}")
+            raise ValueError("Response content is None - model refused to respond")
+
         logger.info(f"📄 [STAGE 3] Response preview: {response_text[:200]}...")
 
         # Парсим JSON
@@ -551,7 +559,10 @@ async def analyze_batch_with_high_detail(
 
     except Exception as e:
         logger.error(f"❌ [STAGE 3] Ошибка анализа: {e}")
-        logger.error(f"Full response text: {response_text[:1000] if 'response_text' in locals() else 'N/A'}")
+        if 'response_text' in locals() and response_text is not None:
+            logger.error(f"Full response text: {response_text[:1000]}")
+        else:
+            logger.error("Response text is None or not available")
         return [
             RequirementAnalysis(
                 number=req['number'],
