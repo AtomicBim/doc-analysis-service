@@ -383,53 +383,62 @@ async def assess_page_relevance(
     """
     Stage 2: Оценка релевантности страниц для каждого требования.
     Возвращает mapping: {requirement_number: [page_numbers]}
+
+    Оптимизировано для gpt-4o-mini: всегда используем Vision API с high-res
     """
     logger.info(f"🔍 [STAGE 2] Оценка релевантности {len(pages_metadata)} страниц для {len(requirements)} требований...")
 
-    # Проверяем лимит страниц (защита от 429 rate limit)
+    # Проверяем, нужно ли разбивать на батчи
     if len(doc_images_low) > STAGE2_MAX_PAGES_PER_REQUEST:
-        logger.warning(f"⚠️ [STAGE 2] Слишком много страниц ({len(doc_images_low)} > {STAGE2_MAX_PAGES_PER_REQUEST})")
-        logger.warning(f"⚠️ [STAGE 2] Используем только метаданные для оценки релевантности")
+        logger.warning(f"⚠️ [STAGE 2] Много страниц ({len(doc_images_low)} > {STAGE2_MAX_PAGES_PER_REQUEST})")
+        logger.warning(f"⚠️ [STAGE 2] Разбиваем на батчи по {STAGE2_MAX_PAGES_PER_REQUEST} страниц...")
 
-        # Используем метаданные + эвристику для mapping (без изображений)
-        page_mapping = {}
+        # Обрабатываем батчами
+        all_page_mappings = []
+        for batch_start in range(0, len(doc_images_low), STAGE2_MAX_PAGES_PER_REQUEST):
+            batch_end = min(batch_start + STAGE2_MAX_PAGES_PER_REQUEST, len(doc_images_low))
+            batch_images = doc_images_low[batch_start:batch_end]
+            batch_metadata = pages_metadata[batch_start:batch_end]
+
+            logger.info(f"📄 [STAGE 2] Обработка батча страниц {batch_start+1}-{batch_end}...")
+
+            # Анализируем батч
+            batch_mapping = await _analyze_relevance_batch(batch_metadata, batch_images, requirements, batch_start)
+            all_page_mappings.append(batch_mapping)
+
+        # Объединяем результаты всех батчей
+        combined_mapping = {}
         for req in requirements:
             req_num = req['number']
-            req_text = req['text'].lower()
-            req_section = req.get('section', '').lower()
+            combined_pages = []
+            for batch_mapping in all_page_mappings:
+                if req_num in batch_mapping:
+                    combined_pages.extend(batch_mapping[req_num])
+            # Убираем дубликаты и сортируем
+            combined_mapping[req_num] = sorted(list(set(combined_pages)))
+            logger.info(f"📄 [STAGE 2] Req {req_num}: страницы {combined_mapping[req_num][:5]}{'...' if len(combined_mapping[req_num]) > 5 else ''}")
 
-            relevant_pages = []
-            for page_meta in pages_metadata:
-                page_num = page_meta['page']
-                page_title = page_meta.get('title', '').lower()
-                page_section = page_meta.get('section', '').lower()
-                page_type = page_meta.get('type', '').lower()
+        logger.info(f"✅ [STAGE 2] Построен mapping для {len(combined_mapping)} требований")
+        return combined_mapping
 
-                # Простая эвристика: совпадение по секции или ключевым словам
-                score = 0
-                if req_section and page_section and req_section in page_section:
-                    score += 2
-                if any(keyword in page_title for keyword in ['план', 'схема', 'разрез'] if keyword in req_text):
-                    score += 1
+    # Если страниц немного - анализируем одним запросом
+    return await _analyze_relevance_batch(pages_metadata, doc_images_low, requirements, 0)
 
-                if score > 0:
-                    relevant_pages.append(page_num)
 
-            # Если ничего не нашли - берем первые 20 страниц
-            if not relevant_pages:
-                relevant_pages = list(range(1, min(21, len(pages_metadata) + 1)))
-
-            page_mapping[req_num] = relevant_pages[:10]  # Ограничиваем до 10 страниц
-            logger.info(f"📄 [STAGE 2] Req {req_num}: страницы {page_mapping[req_num][:5]}{'...' if len(page_mapping[req_num]) > 5 else ''} (на основе метаданных)")
-
-        logger.info(f"✅ [STAGE 2] Построен mapping для {len(page_mapping)} требований (эвристический режим)")
-        return page_mapping
-
-    # Если страниц мало - используем полный анализ с изображениями
+async def _analyze_relevance_batch(
+    batch_metadata: List[Dict[str, Any]],
+    batch_images: List[str],
+    requirements: List[Dict[str, Any]],
+    offset: int = 0
+) -> Dict[int, List[int]]:
+    """
+    Вспомогательная функция для анализа батча страниц.
+    offset - смещение номеров страниц для корректной нумерации
+    """
     # Формируем описание страниц
     pages_description = "\n".join([
         f"Страница {p['page']}: {p.get('title', 'N/A')} [{p.get('section', 'N/A')}] - {p.get('type', 'N/A')}"
-        for p in pages_metadata
+        for p in batch_metadata
     ])
 
     # Формируем список требований
@@ -442,7 +451,7 @@ async def assess_page_relevance(
         "type": "text",
         "text": f"""Ты эксперт по строительной документации.
 
-Перед тобой {len(doc_images_low)} страниц проектной документации в НИЗКОМ разрешении.
+Перед тобой {len(batch_images)} страниц проектной документации в ВЫСОКОМ разрешении (gpt-4o-mini оптимизация).
 Твоя задача: ТОЧНО определить минимальный набор страниц, содержащих информацию для проверки каждого требования.
 
 МЕТАДАННЫЕ СТРАНИЦ:
@@ -479,17 +488,18 @@ async def assess_page_relevance(
 ВАЖНО: Будь точным и экономным. Лучше 5 релевантных страниц, чем 25 возможно релевантных."""
     }]
 
-    # Добавляем изображения в низком качестве
-    for idx, base64_image in enumerate(doc_images_low, 1):
+    # Добавляем изображения в ВЫСОКОМ качестве (gpt-4o-mini дешевая, не экономим)
+    for idx, base64_image in enumerate(batch_images, 1):
+        page_num = offset + idx
         content.append({
             "type": "text",
-            "text": f"\n--- Страница {idx} ---"
+            "text": f"\n--- Страница {page_num} ---"
         })
         content.append({
             "type": "image_url",
             "image_url": {
                 "url": f"data:image/jpeg;base64,{base64_image}",
-                "detail": "low"
+                "detail": STAGE2_DETAIL  # "high" для точности
             }
         })
 
@@ -518,10 +528,10 @@ async def assess_page_relevance(
         return page_mapping
 
     except Exception as e:
-        logger.error(f"❌ [STAGE 2] Ошибка оценки релевантности: {e}")
-        # Fallback: все страницы для всех требований
-        logger.warning("⚠️ [STAGE 2] Используем fallback - все страницы для всех требований")
-        return {req['number']: list(range(1, len(doc_images_low) + 1)) for req in requirements}
+        logger.error(f"❌ [STAGE 2] Ошибка оценки релевантности батча: {e}")
+        # Fallback: все страницы из этого батча для всех требований
+        logger.warning(f"⚠️ [STAGE 2] Используем fallback для батча - страницы {offset+1}-{offset+len(batch_images)}")
+        return {req['number']: list(range(offset + 1, offset + len(batch_images) + 1)) for req in requirements}
 
 
 @retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
