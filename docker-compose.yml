@@ -50,7 +50,6 @@ services:
       timeout: 10s
       retries: 3
 
-  # React UI
   ui-react-service:
     build: ./ui-react-service
     container_name: ui_react_service
@@ -58,8 +57,8 @@ services:
     ports:
       - "7862:80"
     environment:
-      # Set the API URL for the React app
-      - REACT_APP_API_URL=http://localhost:8002
+      # This URL is for the Nginx reverse proxy inside the container
+      - API_URL=http://doc-analysis-api:8000
     networks:
       - doc-analysis-net
     depends_on:
