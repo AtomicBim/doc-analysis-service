@@ -1,42 +1,95 @@
+* {
+  box-sizing: border-box;
+}
+
 .App {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  font-family: sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  background: #f8f9fa;
 }
 
 .App-main {
   display: flex;
   flex-grow: 1;
   overflow: hidden;
+  gap: 0;
 }
 
 .left-panel {
-  width: 40%;
-  overflow-y: auto;
-  border-right: 1px solid #ccc;
-  padding: 1rem;
-}
-
-.right-panel {
-  width: 60%;
+  width: 45%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-right: 2px solid #e5e7eb;
+  background: white;
+}
+
+.right-panel {
+  width: 55%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: white;
 }
 
 .summary-container {
-  padding: 1rem;
-  border-top: 1px solid #ccc;
+  padding: 1.5rem;
+  border-top: 2px solid #e5e7eb;
   overflow-y: auto;
-  background-color: #f9f9f9;
+  background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+  max-height: 300px;
 }
 
 .summary-container h3 {
-  margin-top: 0;
+  margin: 0 0 1rem 0;
+  color: #1f2937;
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.summary-container h3::before {
+  content: "📊";
+  font-size: 1.5rem;
 }
 
 .summary-container pre {
   white-space: pre-wrap;
   word-wrap: break-word;
+  background: white;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #374151;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+@media (max-width: 1024px) {
+  .App-main {
+    flex-direction: column;
+  }
+
+  .left-panel,
+  .right-panel {
+    width: 100%;
+    height: 50%;
+  }
+
+  .left-panel {
+    border-right: none;
+    border-bottom: 2px solid #e5e7eb;
+  }
+}
+
+@media (max-width: 768px) {
+  .summary-container {
+    max-height: 200px;
+    padding: 1rem;
+  }
 }

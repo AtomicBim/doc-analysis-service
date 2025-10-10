@@ -1,46 +1,200 @@
-# Getting Started with Create React App
+# React UI для анализа проектной документации
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Современный веб-интерфейс для анализа строительной документации с использованием AI.
 
-## Available Scripts
+## 🎨 Особенности
 
-In the project directory, you can run:
+- ✨ **Современный UI/UX дизайн** с градиентами и анимациями
+- 📊 **Визуализация результатов** с цветовыми индикаторами статусов
+- 📄 **Встроенный PDF-просмотрщик** с масштабированием
+- 🎯 **Интерактивная навигация** - клик по требованию открывает соответствующую страницу
+- 📱 **Адаптивный дизайн** для различных размеров экрана
+- 🔄 **Работа с API** через Nginx proxy
 
-### `npm start`
+## 🚀 Запуск через Docker
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+### Быстрый старт
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+```bash
+# Из корневой директории проекта
+docker-compose up --build doc-analysis-ui-react
+```
 
-### `npm test`
+Приложение будет доступно по адресу: `http://localhost:7862`
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+### Полный запуск всех сервисов
 
-### `npm run build`
+```bash
+# Запуск API + Gradio UI + React UI
+docker-compose up --build
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+Сервисы:
+- React UI: `http://localhost:7862`
+- Gradio UI: `http://localhost:7861`
+- API: `http://localhost:8002`
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## 🛠️ Локальная разработка
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### Требования
 
-### `npm run eject`
+- Node.js 18+ 
+- npm или yarn
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+### Установка зависимостей
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```bash
+cd ui-react-service
+npm install
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+### Запуск dev-сервера
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+```bash
+npm start
+```
 
-## Learn More
+Приложение откроется в браузере по адресу: `http://localhost:3000`
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+**Примечание:** Для работы с API в режиме разработки нужно:
+1. Запустить API-сервис: `docker-compose up doc-analysis-api`
+2. Настроить proxy в `package.json` (уже настроено на `/api`)
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+### Сборка production-версии
+
+```bash
+npm run build
+```
+
+Собранное приложение будет в папке `build/`
+
+## 📁 Структура проекта
+
+```
+ui-react-service/
+├── public/              # Статические файлы
+├── src/
+│   ├── components/      # React компоненты
+│   │   ├── Header.tsx           # Форма загрузки и настроек
+│   │   ├── Header.css
+│   │   ├── RequirementList.tsx  # Список требований
+│   │   ├── RequirementList.css
+│   │   ├── PdfViewer.tsx        # Просмотрщик PDF
+│   │   └── PdfViewer.css
+│   ├── App.tsx          # Главный компонент
+│   ├── App.css
+│   ├── types.ts         # TypeScript типы
+│   └── index.tsx        # Точка входа
+├── nginx.conf.template  # Конфигурация Nginx для proxy
+├── Dockerfile           # Multi-stage сборка
+└── package.json         # Зависимости
+
+```
+
+## 🎨 Компоненты UI
+
+### Header
+- Выбор стадии проекта (ГК/ФЭ/ЭП)
+- Загрузка файлов (ТЗ, Документация, ТУ)
+- Кнопка запуска анализа с индикатором загрузки
+- Отображение ошибок
+
+### RequirementList  
+- Список всех требований с карточками
+- Цветовые индикаторы статусов:
+  - ✅ Полностью исполнено (зеленый)
+  - ⚠️ Частично исполнено (желтый)
+  - ❌ Не исполнено (красный)
+  - ❓ Требует уточнения (серый)
+- Прогресс-бар уверенности AI
+- Детальная информация по каждому требованию
+
+### PdfViewer
+- Отображение всех страниц PDF
+- Кнопки масштабирования (+/-)
+- Счетчик страниц
+- Плавная прокрутка к нужной странице
+
+## 🔧 Настройка
+
+### API Endpoint
+
+API автоматически проксируется через Nginx:
+- React запросы идут на `/api/*`
+- Nginx перенаправляет на `http://doc-analysis-api:8000`
+
+Настройка в `nginx.conf.template`:
+
+```nginx
+location /api/ {
+    rewrite /api/(.*) /$1 break;
+    proxy_pass http://doc-analysis-api:8000;
+    # ... другие настройки
+}
+```
+
+### Переменные окружения
+
+В Docker Compose можно настроить:
+
+```yaml
+environment:
+  - API_SERVICE_URL=http://doc-analysis-api:8000
+```
+
+## 🐛 Отладка
+
+### Проверка логов контейнера
+
+```bash
+docker logs doc_analysis_ui_react
+```
+
+### Проверка доступности API
+
+```bash
+# Из контейнера
+docker exec -it doc_analysis_ui_react sh
+wget -O- http://doc-analysis-api:8000/
+```
+
+### Проблемы с API
+
+Если API не отвечает:
+1. Проверьте, что контейнер `doc-analysis-api` запущен
+2. Убедитесь, что оба контейнера в одной сети `doc-analysis-net`
+3. Проверьте логи API: `docker logs doc_analysis_api`
+
+## 📦 Зависимости
+
+Основные библиотеки:
+- **React 19** - UI фреймворк
+- **TypeScript** - типизация
+- **axios** - HTTP клиент для API
+- **react-pdf** - отображение PDF документов
+- **@testing-library** - тестирование
+
+## 🎯 Использование
+
+1. Откройте приложение в браузере
+2. Выберите стадию проекта (ГК/ФЭ/ЭП)
+3. Загрузите файл ТЗ (PDF)
+4. Загрузите проектную документацию (PDF)
+5. (Опционально) Включите проверку ТУ и загрузите файл ТУ
+6. Нажмите "Выполнить анализ"
+7. Дождитесь завершения (может занять несколько минут)
+8. Просмотрите результаты:
+   - Слева - список требований с анализом
+   - Справа - PDF документация с возможностью навигации
+
+## 🌟 Преимущества перед Gradio UI
+
+- 🎨 Более современный и привлекательный дизайн
+- ⚡ Быстрее и отзывчивее
+- 📱 Адаптивный дизайн для мобильных устройств
+- 🎯 Лучшая навигация и UX
+- 🔧 Больше возможностей для кастомизации
+
+## 📝 Лицензия
+
+Часть проекта doc-analysis-service
