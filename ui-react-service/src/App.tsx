@@ -24,6 +24,7 @@ function App() {
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const [highlightText, setHighlightText] = useState<string>('');
   const [pageChangeKey, setPageChangeKey] = useState<number>(0);
+  const [analysisCompleted, setAnalysisCompleted] = useState(false);
   
   // Mapping номеров листов на чертежах → порядковые номера страниц в PDF
   const [sheetToPdfMapping, setSheetToPdfMapping] = useState<Record<string, number>>({});
@@ -55,6 +56,7 @@ function App() {
   ) => {
     setRequirements(newRequirements);
     setSummary(newSummary);
+    setAnalysisCompleted(true); // Устанавливаем флаг завершения анализа
     if (mapping) {
       setSheetToPdfMapping(mapping);
       console.log('📊 Получен mapping листов:', mapping);
@@ -84,6 +86,7 @@ function App() {
     setSelectedPage(null);
     setHighlightText('');
     setSheetToPdfMapping({});
+    setAnalysisCompleted(false); // Сбрасываем флаг завершения анализа
   };
 
   return (
@@ -93,6 +96,7 @@ function App() {
         onAnalysisComplete={handleAnalysisComplete}
         onDocFileChange={handleDocFileChange}
         confirmedRequirements={confirmedRequirements}
+        analysisCompleted={analysisCompleted}
       />
       <main className="App-main">
         <div className="left-panel">

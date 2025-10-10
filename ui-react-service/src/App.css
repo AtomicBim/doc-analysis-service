@@ -13,13 +13,13 @@
 
 .App-main {
   display: flex;
-  flex-grow: 1;
+  height: 90vh; /* Оставляем 90% для контента, 10% для хедера */
   overflow: hidden;
   gap: 0;
 }
 
 .left-panel {
-  width: 45%;
+  width: 30%; /* Зона требований 30% */
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -28,7 +28,7 @@
 }
 
 .right-panel {
-  width: 55%;
+  width: 70%; /* Зона чертежа 70% (60% чертеж + 10% сводка) */
   display: flex;
   flex-direction: column;
   overflow: hidden;

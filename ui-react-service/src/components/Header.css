@@ -1,8 +1,10 @@
 .header {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
-  padding: 2rem;
+  padding: 1rem 2rem; /* Уменьшенный padding для компактности */
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  max-height: 10vh; /* Максимум 10% высоты экрана */
+  overflow-y: auto; /* Скролл при переполнении */
 }
 
 .header-content {
@@ -11,19 +13,19 @@
 }
 
 .header-title {
-  margin-bottom: 2rem;
+  margin-bottom: 0.5rem; /* Уменьшенный отступ */
   text-align: center;
 }
 
 .header-title h1 {
-  margin: 0 0 0.5rem 0;
-  font-size: 2rem;
+  margin: 0 0 0.25rem 0;
+  font-size: 1.5rem; /* Уменьшенный размер */
   font-weight: 600;
 }
 
 .header-subtitle {
   margin: 0;
-  font-size: 1rem;
+  font-size: 0.875rem; /* Уменьшенный размер */
   opacity: 0.9;
 }
 
@@ -32,8 +34,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
-  margin: 2rem auto 1.5rem;
+  gap: 0.75rem;
+  margin: 0.75rem auto 0.5rem; /* Уменьшенные отступы */
   max-width: 600px;
 }
 
@@ -56,15 +58,15 @@
 }
 
 .step-number {
-  width: 48px;
-  height: 48px;
+  width: 36px; /* Уменьшенный размер */
+  height: 36px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.2);
-  border: 3px solid rgba(255, 255, 255, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.5); /* Уменьшенная граница */
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.25rem;
+  font-size: 1rem; /* Уменьшенный шрифт */
   font-weight: 700;
   color: white;
   transition: all 0.3s ease;
@@ -79,7 +81,7 @@
 }
 
 .step-label {
-  font-size: 0.875rem;
+  font-size: 0.75rem; /* Уменьшенный размер */
   font-weight: 500;
   text-align: center;
   color: white;
@@ -95,11 +97,11 @@
 .controls-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 1.5rem;
+  gap: 1rem; /* Уменьшенный gap */
   background: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(10px);
-  padding: 2rem;
-  border-radius: 12px;
+  padding: 1rem; /* Уменьшенный padding */
+  border-radius: 8px;
 }
 
 .control-group {

@@ -14,6 +14,7 @@ interface HeaderProps {
   ) => void;
   onDocFileChange: (file: File | null) => void;
   confirmedRequirements: EditableRequirement[] | null;
+  analysisCompleted?: boolean; // Флаг завершения анализа
 }
 
 const API_URL = '/api';
@@ -22,7 +23,8 @@ const Header: React.FC<HeaderProps> = ({
   onRequirementsExtracted,
   onAnalysisComplete, 
   onDocFileChange,
-  confirmedRequirements 
+  confirmedRequirements,
+  analysisCompleted = false
 }) => {
   const [stage, setStage] = useState('ФЭ');
   const [tzFile, setTzFile] = useState<File | null>(null);
@@ -218,8 +220,8 @@ const Header: React.FC<HeaderProps> = ({
             <div className="step-label">Извлечение требований</div>
           </div>
           <div className="step-divider"></div>
-          <div className={`step ${currentStep >= 2 ? 'active' : ''}`}>
-            <div className="step-number">2</div>
+          <div className={`step ${currentStep >= 2 ? 'active' : ''} ${analysisCompleted ? 'completed' : ''}`}>
+            <div className="step-number">{analysisCompleted ? '✓' : '2'}</div>
             <div className="step-label">Анализ проекта</div>
           </div>
         </div>
