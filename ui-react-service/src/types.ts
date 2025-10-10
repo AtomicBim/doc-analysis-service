@@ -7,8 +7,6 @@ export interface Requirement {
     solution_description: string;
     reference: string;
     discrepancies: string;
-    recommendations: string;
     section?: string;
-    trace_id?: string;
   }
   

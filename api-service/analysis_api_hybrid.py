@@ -93,29 +93,6 @@ def load_prompts() -> Dict[str, str]:
     return prompts
 
 
-def load_tu_prompts() -> Dict[str, str]:
-    """Загружает предзагруженные ТУ для стадий ФЭ и ЭП."""
-    tu_prompts: Dict[str, str] = {}
-    prompts_dir = Path(__file__).parent.parent / "prompts"
-
-    tu_stage_files = {
-        "ФЭ": "tu_fe.txt",
-        "ЭП": "tu_ep.txt",
-    }
-
-    for stage, filename in tu_stage_files.items():
-        file_path = prompts_dir / filename
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                tu_prompts[stage] = f.read().strip()
-            logger.info(f"✅ Загружены предзагруженные ТУ для стадии {stage}")
-        except FileNotFoundError:
-            logger.warning(f"⚠️ Не найден файл ТУ: {file_path}")
-            tu_prompts[stage] = ""
-
-    return tu_prompts
-
-
 def load_requirements_extraction_prompt() -> str:
     """Загружает промпт для извлечения требований из ТЗ."""
     prompts_dir = Path(__file__).parent.parent / "prompts"
@@ -159,7 +136,6 @@ def load_stage_prompts() -> Dict[str, str]:
 
 # Загружаем промпты при инициализации
 PROMPTS = load_prompts()
-TU_PROMPTS = load_tu_prompts()
 REQUIREMENTS_EXTRACTION_PROMPT = load_requirements_extraction_prompt()
 STAGE_PROMPTS = load_stage_prompts()
 
@@ -936,9 +912,7 @@ async def analyze_batch_with_high_detail(
                             solution_description="Ошибка при индивидуальном анализе",
                             reference="-",
                             discrepancies=str(e),
-                            recommendations="Проверьте вручную",
-                            section=single_req.get('section'),
-                            trace_id=single_req['trace_id']
+                            section=single_req.get('section')
                         ))
                 return all_results
 
@@ -952,9 +926,7 @@ async def analyze_batch_with_high_detail(
                     solution_description="Модель отказалась анализировать",
                     reference="-",
                     discrepancies=f"Content filter: {refusal or 'Response is None'}",
-                    recommendations="Переформулируйте требование или проверьте вручную",
-                    section=req.get('section'),
-                    trace_id=req['trace_id']
+                    section=req.get('section')
                 )
                 for req in requirements_batch
             ]
@@ -980,8 +952,7 @@ async def analyze_batch_with_high_detail(
                     normalized_analysis = normalize_status_confidence(analysis)
                     results.append(RequirementAnalysis(
                         **normalized_analysis,
-                        section=req.get('section'),
-                        trace_id=req['trace_id']
+                        section=req.get('section')
                     ))
 
             logger.info(f"✅ [STAGE 3] Проанализировано {len(results)}/{len(requirements_batch)} требований")
@@ -1001,9 +972,7 @@ async def analyze_batch_with_high_detail(
                             solution_description="Не проанализировано",
                             reference="-",
                             discrepancies="Отсутствует в ответе модели",
-                            recommendations="Повторите анализ",
-                            section=req.get('section'),
-                            trace_id=req['trace_id']
+                            section=req.get('section')
                         ))
 
             results.sort(key=lambda r: r.number)
@@ -1067,9 +1036,7 @@ async def analyze_batch_with_high_detail(
                 solution_description="Ошибка анализа",
                 reference="-",
                 discrepancies=str(e),
-                recommendations="Повторите анализ",
-                section=req.get('section'),
-                trace_id=req['trace_id']
+                section=req.get('section')
             )
             for req in requirements_batch
         ]
@@ -1224,9 +1191,7 @@ class RequirementAnalysis(BaseModel):
     solution_description: str
     reference: str
     discrepancies: str
-    recommendations: str
     section: Optional[str] = None
-    trace_id: Optional[str] = None
 
 
 class AnalysisResponse(BaseModel):

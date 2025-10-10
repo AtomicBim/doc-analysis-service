@@ -5,7 +5,6 @@ export interface EditableRequirement {
   number: number;
   text: string;
   section?: string;
-  trace_id?: string;
   selected: boolean;
 }
 
