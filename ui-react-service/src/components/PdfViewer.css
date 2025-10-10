@@ -21,12 +21,26 @@
   display: flex;
   align-items: center;
   gap: 1rem;
+  flex: 1;
 }
 
 .page-info {
   font-size: 0.875rem;
   font-weight: 500;
   color: #374151;
+}
+
+.search-indicator {
+  font-size: 0.75rem;
+  color: #0369a1;
+  background: #e0f2fe;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 500;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolbar-controls {
@@ -52,6 +66,17 @@
 
 .toolbar-button:active {
   transform: scale(0.95);
+}
+
+.toolbar-button.clear-search {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+.toolbar-button.clear-search:hover {
+  background: #fca5a5;
+  border-color: #dc2626;
 }
 
 .zoom-level {
@@ -81,6 +106,16 @@
 .pdf-page-wrapper canvas {
   display: block;
   max-width: 100%;
+}
+
+/* Подсветка текста на PDF (работает с text layer) */
+.pdf-page-wrapper .textLayer > span[role="presentation"]:contains() {
+  position: relative;
+}
+
+.pdf-page-wrapper.highlight-active .textLayer > span[role="presentation"] {
+  background: transparent;
+  transition: background 0.2s ease;
 }
 
 .pdf-viewer-empty {

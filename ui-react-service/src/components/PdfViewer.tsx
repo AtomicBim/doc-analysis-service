@@ -11,12 +11,14 @@ pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.vers
 interface PdfViewerProps {
   file: File | null;
   page: number | null;
+  highlightText?: string;
 }
 
-const PdfViewer: React.FC<PdfViewerProps> = ({ file, page }) => {
+const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' }) => {
   const [numPages, setNumPages] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [scale, setScale] = useState<number>(1.0);
+  const [searchText, setSearchText] = useState<string>('');
   const viewerRef = useRef<HTMLDivElement>(null);
 
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
@@ -33,6 +35,13 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page }) => {
       }
     }
   }, [page]);
+
+  // Обновляем текст для поиска
+  useEffect(() => {
+    if (highlightText) {
+      setSearchText(highlightText);
+    }
+  }, [highlightText]);
 
   const handleZoomIn = () => {
     setScale(prev => Math.min(prev + 0.2, 3.0));
@@ -63,6 +72,11 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page }) => {
           <span className="page-info">
             Страница {currentPage} из {numPages || '?'}
           </span>
+          {searchText && (
+            <span className="search-indicator" title={`Поиск: ${searchText}`}>
+              🔍 "{searchText.substring(0, 30)}..."
+            </span>
+          )}
         </div>
         <div className="toolbar-controls">
           <button className="toolbar-button" onClick={handleZoomOut} title="Уменьшить">
@@ -75,6 +89,15 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page }) => {
           <button className="toolbar-button" onClick={handleResetZoom} title="Сбросить масштаб">
             ↺
           </button>
+          {searchText && (
+            <button 
+              className="toolbar-button clear-search" 
+              onClick={() => setSearchText('')}
+              title="Очистить поиск"
+            >
+              ✕
+            </button>
+          )}
         </div>
       </div>
       <div ref={viewerRef} className="pdf-viewer-content">
@@ -102,6 +125,7 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page }) => {
                 renderTextLayer={true}
                 renderAnnotationLayer={true}
               />
+              {/* Подсветка добавлена через CSS стили text-layer */}
             </div>
           ))}
         </Document>

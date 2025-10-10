@@ -5,20 +5,45 @@ import './RequirementList.css';
 
 interface RequirementListProps {
   requirements: Requirement[];
-  onSelect: (page: number) => void;
+  onSelect: (page: number, highlightText?: string) => void;
 }
 
 const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelect }) => {
-  const extractPageNumber = (reference: string): number | null => {
-    const match = reference.match(/страница (\d+)/i);
-    if (match && match[1]) {
-      return parseInt(match[1], 10);
-    }
-    const match2 = reference.match(/(\d+)/);
-    if (match2 && match2[1]) {
-        return parseInt(match2[1], 10);
+  // Извлекаем ВСЕ номера страниц из ссылки
+  const extractPageNumbers = (reference: string): number[] => {
+    const pages: number[] = [];
+    
+    // Ищем все числа после "страница", "лист", "стр.", "с."
+    const pageRegex = /(?:страниц[аы]|лист|стр\.|с\.)\s*(\d+)/gi;
+    let match;
+    while ((match = pageRegex.exec(reference)) !== null) {
+      const pageNum = parseInt(match[1], 10);
+      if (pageNum && !pages.includes(pageNum)) {
+        pages.push(pageNum);
       }
-    return null;
+    }
+    
+    // Если не нашли с ключевыми словами, ищем просто числа
+    if (pages.length === 0) {
+      const numberRegex = /\b(\d+)\b/g;
+      let numberMatch;
+      while ((numberMatch = numberRegex.exec(reference)) !== null) {
+        const pageNum = parseInt(numberMatch[1], 10);
+        // Фильтруем слишком большие числа (вероятно не номера страниц)
+        if (pageNum && pageNum < 1000 && !pages.includes(pageNum)) {
+          pages.push(pageNum);
+        }
+      }
+    }
+    
+    return pages.sort((a, b) => a - b);
+  };
+
+  // Извлекаем текст для highlight (из solution_description)
+  const extractTextForHighlight = (solution: string): string => {
+    // Берем ключевые слова из решения (первые 50 символов)
+    const keywords = solution.substring(0, 50).trim();
+    return keywords;
   };
 
   const getStatusColor = (status: string): string => {
@@ -64,15 +89,14 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
       ) : (
         <div className="requirements-list">
           {requirements.map((req) => {
-            const page = extractPageNumber(req.reference);
+            const pages = extractPageNumbers(req.reference);
             const statusClass = getStatusColor(req.status);
             const statusIcon = getStatusIcon(req.status);
             
             return (
               <div
                 key={req.number}
-                className={`requirement-card ${page ? 'clickable' : ''}`}
-                onClick={() => page && onSelect(page)}
+                className="requirement-card"
               >
                 <div className="requirement-header">
                   <span className="requirement-number">#{req.number}</span>
@@ -94,6 +118,29 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
                       <span className="detail-label">Ссылка:</span>
                       <span className="detail-value reference">{req.reference}</span>
                     </div>
+                    
+                    {/* Кнопки для перехода на каждую страницу */}
+                    {pages.length > 0 && (
+                      <div className="detail-item pages-navigation">
+                        <span className="detail-label">Перейти к листам:</span>
+                        <div className="page-buttons">
+                          {pages.map((pageNum, idx) => (
+                            <button
+                              key={idx}
+                              className="page-button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const textToFind = extractTextForHighlight(req.solution_description);
+                                onSelect(pageNum, textToFind);
+                              }}
+                              title={`Перейти к странице ${pageNum} и выделить текст`}
+                            >
+                              📄 {pageNum}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     
                     {req.discrepancies && req.discrepancies !== '-' && (
                       <div className="detail-item discrepancy">

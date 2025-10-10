@@ -95,13 +95,8 @@
   transition: all 0.3s ease;
 }
 
-.requirement-card.clickable {
-  cursor: pointer;
-}
-
-.requirement-card.clickable:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  transform: translateY(-2px);
+.requirement-card:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
 }
 
 .requirement-header {
@@ -251,6 +246,53 @@
   border-radius: 6px;
   font-size: 0.75rem;
   font-weight: 500;
+}
+
+/* Стили для навигации по страницам */
+.pages-navigation {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  padding: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #bae6fd;
+}
+
+.pages-navigation .detail-label {
+  color: #0369a1;
+  font-weight: 600;
+}
+
+.page-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.page-button {
+  padding: 0.4rem 0.8rem;
+  background: white;
+  color: #0369a1;
+  border: 2px solid #0284c7;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.page-button:hover {
+  background: #0284c7;
+  color: white;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(2, 132, 199, 0.3);
+}
+
+.page-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(2, 132, 199, 0.3);
 }
 
 @media (max-width: 768px) {

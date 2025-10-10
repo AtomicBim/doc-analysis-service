@@ -10,6 +10,7 @@ function App() {
   const [summary, setSummary] = useState<string>('');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
+  const [highlightText, setHighlightText] = useState<string>('');
 
   const handleAnalysisComplete = (
     newRequirements: Requirement[],
@@ -21,11 +22,13 @@ function App() {
 
   const handleDocFileChange = (file: File | null) => {
     setPdfFile(file);
-    setSelectedPage(null); // Сброс выбранной страницы при загрузке нового файла
+    setSelectedPage(null);
+    setHighlightText(''); // Сброс highlight при загрузке нового файла
   };
 
-  const handleRequirementSelect = (page: number) => {
+  const handleRequirementSelect = (page: number, textToHighlight?: string) => {
     setSelectedPage(page);
+    setHighlightText(textToHighlight || '');
   };
 
   return (
@@ -42,7 +45,7 @@ function App() {
           />
         </div>
         <div className="right-panel">
-          <PdfViewer file={pdfFile} page={selectedPage} />
+          <PdfViewer file={pdfFile} page={selectedPage} highlightText={highlightText} />
           {summary && (
             <div className="summary-container">
               <h3>Общая сводка</h3>
