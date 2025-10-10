@@ -1165,12 +1165,22 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
     )
 
     try:
-        data = json.loads(response.choices[0].message.content)
+        response_text = response.choices[0].message.content
+        logger.info(f"📄 GPT response preview: {response_text[:500]}...")
+        
+        data = json.loads(response_text)
+        logger.info(f"📊 Parsed JSON keys: {list(data.keys())}")
+        
         requirements = data.get("requirements", [])
+        
+        if not requirements:
+            logger.warning(f"⚠️ Пустой список требований! Полный ответ GPT: {response_text}")
+        
         logger.info(f"✅ Извлечено {len(requirements)} требований")
         return requirements
     except json.JSONDecodeError as e:
         logger.error(f"❌ Failed to parse requirements JSON: {e}")
+        logger.error(f"❌ Response text: {response.choices[0].message.content}")
         raise ValueError("Failed to parse requirements JSON")
 
 
