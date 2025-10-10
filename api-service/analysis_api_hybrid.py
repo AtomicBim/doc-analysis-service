@@ -322,7 +322,12 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
                         "title": f"Страница {item['page_number']}",
                         "section": "Unknown",
                         "type": "unknown",
-                        "sheet_number": f"{item['page_number']}"
+                        "sheet_number": f"{item['page_number']}",
+                        "sheet_number_validation": {
+                            "matches": False,
+                            "found_in": ["stamp", "bottom_center", "top_right"],
+                            "values": ["N/A", "N/A", "N/A"]
+                        }
                     })
 
         logger.info(f"✅ [STAGE 1] Извлечено метаданных для {len(all_pages_metadata)} страниц (всего батчей: {(len(crops)-1)//STAGE1_MAX_PAGES_PER_REQUEST + 1})")
@@ -366,8 +371,18 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
     except Exception as e:
         logger.error(f"❌ [STAGE 1] Ошибка извлечения метаданных: {e}")
         # Fallback: возвращаем пустые метаданные
-        return [{"page": i+1, "title": f"Страница {i+1}", "section": "Unknown", "type": "unknown", "sheet_number": f"{i+1}"}
-                for i in range(len(crops))]
+        return [{
+            "page": i+1,
+            "title": f"Страница {i+1}",
+            "section": "Unknown",
+            "type": "unknown",
+            "sheet_number": f"{i+1}",
+            "sheet_number_validation": {
+                "matches": False,
+                "found_in": ["stamp", "bottom_center", "top_right"],
+                "values": ["N/A", "N/A", "N/A"]
+            }
+        } for i in range(len(crops))]
 
 
 async def assess_page_relevance(
@@ -380,7 +395,7 @@ async def assess_page_relevance(
     Stage 2: Оценка релевантности страниц для каждого требования.
     Возвращает mapping: {requirement_number: [page_numbers]}
 
-    Оптимизировано для gpt-4o-mini: всегда используем Vision API с high-res
+    Оптимизировано для gpt-5-mini: всегда используем Vision API с high-res
     """
     logger.info(f"🔍 [STAGE 2] Оценка релевантности {len(pages_metadata)} страниц для {len(requirements)} требований...")
 
@@ -457,7 +472,7 @@ async def _analyze_relevance_batch(
         "text": prompt_text
     }]
 
-    # Добавляем изображения в ВЫСОКОМ качестве (gpt-4o-mini дешевая, не экономим)
+    # Добавляем изображения в ВЫСОКОМ качестве (gpt-5-mini дешевая, не экономим)
     for idx, base64_image in enumerate(batch_images, 1):
         page_num = (page_numbers[idx - 1] if page_numbers and idx - 1 < len(page_numbers) else (offset + idx))
         content.append({
@@ -753,10 +768,14 @@ async def analyze_batch_with_high_detail(
     doc_content: bytes,
     page_numbers: List[int],
     requirements_batch: List[Dict[str, Any]],
-    request: Request
+    request: Request,
+    pages_metadata: Optional[List[Dict[str, Any]]] = None
 ) -> List['RequirementAnalysis']:
     """
     Stage 3: Детальный анализ пакета требований с ВЫСОКИМ разрешением релевантных страниц.
+    
+    Args:
+        pages_metadata: Метаданные страниц с номерами листов из Stage 1
     """
     if await request.is_disconnected():
         logger.warning(f"⚠️ [STAGE 3] Client disconnected")
@@ -782,7 +801,8 @@ async def analyze_batch_with_high_detail(
                 doc_content=doc_content,
                 page_numbers=chunk_pages,
                 requirements_batch=requirements_batch,
-                request=request
+                request=request,
+                pages_metadata=pages_metadata
             )
 
             if not chunk_results:
@@ -835,8 +855,27 @@ async def analyze_batch_with_high_detail(
         for req in requirements_batch
     ])
 
-    # Формируем список доступных страниц
-    available_pages_str = ", ".join(map(str, page_numbers))
+    # Создаем mapping PDF страница → Номер листа проекта
+    page_to_sheet_mapping = {}
+    if pages_metadata:
+        for page_meta in pages_metadata:
+            pdf_page = page_meta.get('page')
+            sheet_num = page_meta.get('sheet_number', f"Стр.{pdf_page}")
+            if pdf_page:
+                page_to_sheet_mapping[pdf_page] = sheet_num
+    
+    # Формируем список доступных страниц с номерами листов
+    if page_to_sheet_mapping:
+        available_pages_list = []
+        for page_num in page_numbers:
+            sheet_num = page_to_sheet_mapping.get(page_num, f"Стр.{page_num}")
+            available_pages_list.append(f"PDF стр.{page_num} (Лист {sheet_num})")
+        available_pages_str = ", ".join(available_pages_list)
+        logger.info(f"📄 [STAGE 3] Доступные листы: {available_pages_str[:200]}...")
+    else:
+        # Fallback если нет метаданных
+        available_pages_str = ", ".join(map(str, page_numbers))
+        logger.warning(f"⚠️ [STAGE 3] Нет метаданных о листах, используем PDF страницы")
 
     # Используем загруженный промпт
     prompt_text = STAGE_PROMPTS["stage3_analysis"].format(
@@ -851,12 +890,20 @@ async def analyze_batch_with_high_detail(
         "text": prompt_text
     }]
 
-    # Добавляем изображения в высоком качестве
+    # Добавляем изображения в высоком качестве с номерами листов
     for idx, base64_image in enumerate(doc_images_high, 1):
         page_num = page_numbers[idx - 1] if idx <= len(page_numbers) else idx
+        
+        # Получаем номер листа проекта для подписи
+        if page_to_sheet_mapping and page_num in page_to_sheet_mapping:
+            sheet_num = page_to_sheet_mapping[page_num]
+            page_label = f"PDF стр.{page_num} (Лист {sheet_num})"
+        else:
+            page_label = f"Страница {page_num}"
+        
         content.append({
             "type": "text",
-            "text": f"\n--- Страница {page_num} ---"
+            "text": f"\n--- {page_label} ---"
         })
         content.append({
             "type": "image_url",
@@ -899,7 +946,8 @@ async def analyze_batch_with_high_detail(
                             doc_content=doc_content,
                             page_numbers=page_numbers,
                             requirements_batch=[single_req],
-                            request=request
+                            request=request,
+                            pages_metadata=pages_metadata
                         )
                         all_results.extend(single_result)
                     except Exception as e:
@@ -940,7 +988,12 @@ async def analyze_batch_with_high_detail(
             json_str = response_text[json_start:json_end]
             data = json.loads(json_str)
 
-            analyses = data.get('analyses', [])
+            # Поддержка двух форматов: { analyses: [...] } ИЛИ одиночный объект анализа
+            if 'analyses' in data:
+                analyses = data.get('analyses', [])
+            else:
+                # Пытаемся интерпретировать как единичный объект анализа
+                analyses = [data]
             req_map = {req['number']: req for req in requirements_batch}
 
             results = []
@@ -1002,7 +1055,8 @@ async def analyze_batch_with_high_detail(
                     doc_content=doc_content,
                     page_numbers=chunk_pages,
                     requirements_batch=requirements_batch,
-                    request=request
+                    request=request,
+                    pages_metadata=pages_metadata
                 )
                 if not chunk_results:
                     return []
@@ -1466,7 +1520,8 @@ async def analyze_documentation(
                     doc_content=doc_content,
                     page_numbers=list(pages_key),
                     requirements_batch=batch,
-                    request=request
+                    request=request,
+                    pages_metadata=pages_metadata
                 )
 
                 if not batch_results:
