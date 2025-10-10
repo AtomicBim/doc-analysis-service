@@ -47,16 +47,31 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
     return () => clearTimeout(t);
   }, [page, numPages, scale, file]);
 
-  // Обновляем текст для поиска
+  // Обновляем текст для поиска при изменении highlightText или страницы
   useEffect(() => {
     if (highlightText) {
       setSearchText(highlightText);
+      console.log('🔍 Обновлен searchText:', highlightText, 'для страницы', page);
+    } else {
+      // Если highlightText пустой - очищаем поиск
+      setSearchText('');
     }
-  }, [highlightText]);
+  }, [highlightText, page]);
 
   // Подсветка текста на странице (работает только с текстовым слоем PDF)
   useEffect(() => {
-    if (!searchText || !page || !viewerRef.current) return;
+    if (!viewerRef.current) return;
+
+    // ВСЕГДА сначала очищаем ВСЕ предыдущие подсветки на ВСЕХ страницах
+    const allTextLayers = viewerRef.current.querySelectorAll('.textLayer');
+    allTextLayers.forEach(textLayer => {
+      textLayer.querySelectorAll('.highlighted-text').forEach(el => {
+        el.classList.remove('highlighted-text');
+      });
+    });
+
+    // Если нет текста для поиска или страницы - выходим после очистки
+    if (!searchText || !page) return;
 
     // Даем время на отрисовку текстового слоя
     const timer = setTimeout(() => {
@@ -65,14 +80,9 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
 
       const textLayer = pageWrapper.querySelector('.textLayer');
       if (!textLayer) {
-        console.log('Текстовый слой не найден. PDF может содержать только изображения.');
+        console.log('Текстовый слой не найден на странице', page, '. PDF может содержать только изображения.');
         return;
       }
-
-      // Убираем предыдущую подсветку
-      textLayer.querySelectorAll('.highlighted-text').forEach(el => {
-        el.classList.remove('highlighted-text');
-      });
 
       // Ищем текст для подсветки (нечувствительно к регистру)
       const searchLower = searchText.toLowerCase();
@@ -95,14 +105,14 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
         if (firstHighlight) {
           firstHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
-        console.log('Текст найден и подсвечен на странице', page);
+        console.log('✅ Текст найден и подсвечен на странице', page, ':', searchText);
       } else {
-        console.log('Текст не найден на странице', page, 'Возможно, PDF содержит только изображения.');
+        console.warn('❌ Текст не найден на странице', page, ':', searchText);
       }
     }, 500); // Даем время на рендеринг текстового слоя
 
     return () => clearTimeout(timer);
-  }, [searchText, page]);
+  }, [searchText, page, highlightText]);  // Добавили highlightText в зависимости
 
   const handleZoomIn = () => {
     setScale(prev => Math.min(prev + 0.2, 3.0));
