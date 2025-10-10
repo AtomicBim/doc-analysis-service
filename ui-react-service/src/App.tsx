@@ -11,6 +11,7 @@ function App() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const [highlightText, setHighlightText] = useState<string>('');
+  const [pageChangeKey, setPageChangeKey] = useState<number>(0);
 
   const handleAnalysisComplete = (
     newRequirements: Requirement[],
@@ -27,14 +28,10 @@ function App() {
   };
 
   const handleRequirementSelect = (page: number, textToHighlight?: string) => {
-    // Форсируем перерасчет, даже если выбирают ту же страницу подряд
-    if (selectedPage === page) {
-      setSelectedPage(null);
-      setTimeout(() => setSelectedPage(page), 0);
-    } else {
-      setSelectedPage(page);
-    }
+    // Форсируем перерасчет через key change
+    setSelectedPage(page);
     setHighlightText(textToHighlight || '');
+    setPageChangeKey(prev => prev + 1);
   };
 
   return (
@@ -51,7 +48,12 @@ function App() {
           />
         </div>
         <div className="right-panel">
-          <PdfViewer file={pdfFile} page={selectedPage} highlightText={highlightText} />
+          <PdfViewer 
+            file={pdfFile} 
+            page={selectedPage} 
+            highlightText={highlightText}
+            key={pageChangeKey}
+          />
           {summary && (
             <div className="summary-container">
               <h3>Общая сводка</h3>

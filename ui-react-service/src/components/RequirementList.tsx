@@ -48,20 +48,25 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
         description = description.substring(0, 147) + '...';
       }
       
-      if (pageNum && pageNum < 1000) {
+      // Валидация: разумный диапазон страниц (1-500)
+      if (pageNum && pageNum > 0 && pageNum < 500) {
         references.push({ page: pageNum, description });
       }
     }
     
     // Поддержка ссылок из поля reference (если API вернул компактные ссылки)
-    if (referenceField && referenceField.trim()) {
+    if (referenceField && referenceField.trim() && referenceField !== '-') {
       // Ищем все номера страниц в строке reference
-      const digits = referenceField.match(/\d{1,4}/g);
+      const digits = referenceField.match(/\d{1,3}/g);
       if (digits) {
         digits.forEach((d) => {
           const pageNum = parseInt(d, 10);
-          if (!isNaN(pageNum) && pageNum > 0 && pageNum < 10000) {
-            references.push({ page: pageNum, description: referenceField.trim() });
+          // Валидация: разумный диапазон страниц (1-500)
+          if (!isNaN(pageNum) && pageNum > 0 && pageNum < 500) {
+            // Проверяем, нет ли уже такой страницы
+            if (!references.some(r => r.page === pageNum)) {
+              references.push({ page: pageNum, description: referenceField.trim() });
+            }
           }
         });
       }
@@ -90,7 +95,8 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
             description = description.substring(0, 147) + '...';
           }
           
-          if (pageNum && pageNum < 1000) {
+          // Валидация: разумный диапазон страниц (1-500)
+          if (pageNum && pageNum > 0 && pageNum < 500) {
             references.push({ page: pageNum, description: description || sentence.trim() });
           }
         }
