@@ -28,7 +28,7 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
   const handleAnalyze = async () => {
     if (!tzFile || !docFile) {
       setError('Необходимо загрузить ТЗ и файл документации.');
-      return;
+      return; 
     }
 
     setLoading(true);
@@ -36,26 +36,38 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
     setAnalysisProgress(0);
     setCurrentStage('');
 
-    // Симуляция прогресса через этапы
-    const stages = [
-      { name: 'Извлечение текста из ТЗ', duration: 30000, progress: 15 }, // 30 сек
-      { name: 'Сегментация требований', duration: 20000, progress: 25 },  // 20 сек
-      { name: 'Stage 1: Извлечение метаданных', duration: 40000, progress: 40 }, // 40 сек
-      { name: 'Stage 2: Оценка релевантности', duration: 60000, progress: 60 }, // 1 мин
-      { name: 'Stage 3: Детальный анализ', duration: 300000, progress: 85 }, // 5 мин
-      { name: 'Stage 4: Поиск противоречий', duration: 60000, progress: 95 }, // 1 мин
-      { name: 'Финализация результатов', duration: 10000, progress: 100 }, // 10 сек
+  // Симуляция прогресса через этапы (с учетом бэкенд-логов): удерживаем <=95% до ответа API
+  const stages = [
+      { name: 'Извлечение текста из ТЗ', duration: 15000, progress: 12 },
+      { name: 'Сегментация требований', duration: 10000, progress: 22 },
+      { name: 'Stage 1: Извлечение метаданных', duration: 20000, progress: 38 },
+      { name: 'Stage 2: Оценка релевантности', duration: 30000, progress: 55 },
+      { name: 'Stage 3: Детальный анализ', duration: 240000, progress: 92 },
+      { name: 'Stage 4: Поиск противоречий', duration: 30000, progress: 95 },
     ];
 
     let currentStageIndex = 0;
+    let elapsed = 0;
+    const totalStageDuration = stages.reduce((acc, s) => acc + s.duration, 0);
+    const tick = 500; // обновление каждые 0.5с для плавности
     const progressInterval = setInterval(() => {
       if (currentStageIndex < stages.length) {
         const stage = stages[currentStageIndex];
+        elapsed += tick;
         setCurrentStage(stage.name);
-        setAnalysisProgress(stage.progress);
-        currentStageIndex++;
+        // Плавное приближение к целевому прогрессу этапа
+        setAnalysisProgress((prev) => {
+          const target = stage.progress;
+          const step = Math.max(0.5, (target - prev) * 0.05);
+          const next = Math.min(prev + step, target);
+          return Math.min(next, 95);
+        });
+        if (elapsed >= stage.duration) {
+          currentStageIndex++;
+          elapsed = 0;
+        }
       }
-    }, 30000); // Обновление каждые 30 секунд
+    }, tick);
 
     const formData = new FormData();
     formData.append('stage', stage);

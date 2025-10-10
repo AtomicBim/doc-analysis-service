@@ -8,7 +8,7 @@ import json
 import logging
 import asyncio
 import warnings
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 import fitz  # pymupdf
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -158,6 +158,49 @@ async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pag
         doc.close()
         logger.info(f"✅ [IMG] Извлечено {len(images)} страниц")
         return images
+
+    return await asyncio.to_thread(_extract)
+
+
+async def extract_selected_pdf_pages_as_images(
+    doc_content: bytes,
+    filename: str,
+    selected_pages: List[int],
+    detail: str = "low",
+    dpi: int = 100,
+    quality: int = 70
+) -> Tuple[List[str], List[int]]:
+    """
+    Извлекает ТОЛЬКО выбранные страницы PDF как base64-encoded изображения.
+    Возвращает кортеж (images, page_numbers) в той же последовательности.
+    """
+    logger.info(f"📄 [IMG] Извлечение выбранных страниц из {filename}: {selected_pages[:10]}{'...' if len(selected_pages) > 10 else ''} (detail={detail})")
+
+    def _extract():
+        import base64
+        from PIL import Image
+        import io
+
+        doc = fitz.open(stream=doc_content, filetype="pdf")
+        images: List[str] = []
+        page_nums_kept: List[int] = []
+
+        for page_num in selected_pages:
+            if page_num < 1 or page_num > len(doc):
+                continue
+            page = doc[page_num - 1]
+            pix = page.get_pixmap(dpi=dpi)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=quality)
+            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+            images.append(base64_image)
+            page_nums_kept.append(page_num)
+
+        doc.close()
+        logger.info(f"✅ [IMG] Извлечено {len(images)}/{len(selected_pages)} выбранных страниц")
+        return images, page_nums_kept
 
     return await asyncio.to_thread(_extract)
 
@@ -375,7 +418,8 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
 async def assess_page_relevance(
     pages_metadata: List[Dict[str, Any]],
     doc_images_low: List[str],
-    requirements: List[Dict[str, Any]]
+    requirements: List[Dict[str, Any]],
+    page_numbers: Optional[List[int]] = None
 ) -> Dict[int, List[int]]:
     """
     Stage 2: Оценка релевантности страниц для каждого требования.
@@ -396,11 +440,12 @@ async def assess_page_relevance(
             batch_end = min(batch_start + STAGE2_MAX_PAGES_PER_REQUEST, len(doc_images_low))
             batch_images = doc_images_low[batch_start:batch_end]
             batch_metadata = pages_metadata[batch_start:batch_end]
+            batch_page_numbers = page_numbers[batch_start:batch_end] if page_numbers else list(range(batch_start + 1, batch_end + 1))
 
             logger.info(f"📄 [STAGE 2] Обработка батча страниц {batch_start+1}-{batch_end}...")
 
             # Анализируем батч
-            batch_mapping = await _analyze_relevance_batch(batch_metadata, batch_images, requirements, batch_start)
+            batch_mapping = await _analyze_relevance_batch(batch_metadata, batch_images, requirements, 0, batch_page_numbers)
             all_page_mappings.append(batch_mapping)
 
         # Объединяем результаты всех батчей
@@ -419,14 +464,15 @@ async def assess_page_relevance(
         return combined_mapping
 
     # Если страниц немного - анализируем одним запросом
-    return await _analyze_relevance_batch(pages_metadata, doc_images_low, requirements, 0)
+    return await _analyze_relevance_batch(pages_metadata, doc_images_low, requirements, 0, page_numbers or list(range(1, len(doc_images_low)+1)))
 
 
 async def _analyze_relevance_batch(
     batch_metadata: List[Dict[str, Any]],
     batch_images: List[str],
     requirements: List[Dict[str, Any]],
-    offset: int = 0
+    offset: int = 0,
+    page_numbers: Optional[List[int]] = None
 ) -> Dict[int, List[int]]:
     """
     Вспомогательная функция для анализа батча страниц.
@@ -487,7 +533,7 @@ async def _analyze_relevance_batch(
 
     # Добавляем изображения в ВЫСОКОМ качестве (gpt-4o-mini дешевая, не экономим)
     for idx, base64_image in enumerate(batch_images, 1):
-        page_num = offset + idx
+        page_num = (page_numbers[idx - 1] if page_numbers and idx - 1 < len(page_numbers) else (offset + idx))
         content.append({
             "type": "text",
             "text": f"\n--- Страница {page_num} ---"
@@ -528,6 +574,57 @@ async def _analyze_relevance_batch(
         # Fallback: все страницы из этого батча для всех требований
         logger.warning(f"⚠️ [STAGE 2] Используем fallback для батча - страницы {offset+1}-{offset+len(batch_images)}")
         return {req['number']: list(range(offset + 1, offset + len(batch_images) + 1)) for req in requirements}
+
+
+# ============================
+# TEXT PREFILTER FOR STAGE 2
+# ============================
+
+def _extract_page_texts_quick(doc_content: bytes, max_pages: int = 200) -> List[str]:
+    """Быстро извлекает текст по страницам без OCR (для префильтра)."""
+    texts: List[str] = []
+    doc = fitz.open(stream=doc_content, filetype="pdf")
+    total_pages = min(len(doc), max_pages)
+    for i in range(total_pages):
+        page = doc[i]
+        page_text = page.get_text() or ""
+        texts.append(page_text)
+    doc.close()
+    return texts
+
+
+def _simple_candidate_pages(requirements: List[Dict[str, Any]], page_texts: List[str], per_req: int = 7, cap_total: int = 30) -> List[int]:
+    """Простой текстовый префильтр: выбирает top-k страниц для каждого требования по совпадению ключевых слов."""
+    import re
+    candidates: List[int] = []
+    # Очень простой tokenizer
+    def toks(s: str) -> List[str]:
+        return re.findall(r"[A-Za-zА-Яа-яЁё0-9_-]{2,}", (s or "").lower())
+
+    page_tokens = [toks(t) for t in page_texts]
+
+    for req in requirements:
+        words = toks(req.get('text', ''))
+        if not words:
+            continue
+        scores: List[Tuple[int, int]] = []  # (page_index, score)
+        word_set = set(words)
+        for idx, p_tokens in enumerate(page_tokens):
+            if not p_tokens:
+                continue
+            score = sum(1 for w in p_tokens if w in word_set)
+            if score:
+                scores.append((idx, score))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        top = [i for (i, _) in scores[:per_req]]
+        candidates.extend(top)
+
+    # Уникальные, отсортированные, ограниченные по количеству
+    uniq = sorted(list({i for i in candidates}))
+    if not uniq:
+        # fallback: первые 20 страниц
+        uniq = list(range(0, min(20, len(page_texts))))
+    return [i + 1 for i in uniq[:cap_total]]  # 1-based
 
 
 @retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
@@ -1056,55 +1153,44 @@ async def extract_text_from_pdf(content: bytes, filename: str) -> str:
 
     text = ""
     doc = fitz.open(stream=content, filetype="pdf")
-    is_scanned = True
-
-    # Сначала пробуем извлечь текст напрямую
-    for page in doc:
-        page_text = page.get_text()
+    # Mixed-mode: постранично
+    for page_index, page in enumerate(doc):
+        page_text = page.get_text() or ""
         if page_text.strip():
-            is_scanned = False
             text += page_text + "\n\n"
+            continue
+        # OCR только для пустых по тексту страниц
+        logger.info(f"📄 OCR страницы {page_index + 1}/{len(doc)} из {filename}")
+        pix = page.get_pixmap(dpi=100)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-    # Если текста нет - используем OCR через OpenAI Vision
-    if is_scanned or not text.strip():
-        logger.warning(f"⚠️ Файл {filename} отсканирован, применяем OCR через OpenAI Vision...")
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='JPEG', quality=70)
+        base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
 
-        for page_num, page in enumerate(doc):
-            # Рендерим страницу в изображение
-            pix = page.get_pixmap(dpi=100)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Извлеки весь текст с этого изображения. Сохрани структуру, номера пунктов, таблицы. Верни только текст без комментариев."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        }
+                    ]
+                }
+            ],
+            max_completion_tokens=4000
+        )
+        page_text = response.choices[0].message.content or ""
+        text += f"\n\n--- Страница {page_index + 1} ---\n\n{page_text}"
 
-            # Конвертируем в base64
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=70)
-            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
-
-            # OCR через Vision
-            logger.info(f"📄 OCR страницы {page_num + 1}/{len(doc)} из {filename}")
-            response = await client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Извлеки весь текст с этого изображения. Сохрани структуру, номера пунктов, таблицы. Верни только текст без комментариев."
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                            }
-                        ]
-                    }
-                ],
-                max_completion_tokens=4000
-            )
-
-            page_text = response.choices[0].message.content
-            text += f"\n\n--- Страница {page_num + 1} ---\n\n{page_text}"
-
-        logger.info(f"✅ OCR завершен для {filename}, извлечено {len(text)} символов")
+    logger.info(f"✅ Извлечен текст из PDF {filename}, символов: {len(text)}")
 
     doc.close()
 
@@ -1113,6 +1199,45 @@ async def extract_text_from_pdf(content: bytes, filename: str) -> str:
         return "[Документ пуст или не удалось распознать текст]"
 
     return text.strip()
+
+
+async def extract_text_from_docx(content: bytes, filename: str) -> str:
+    """Извлекает текст из DOCX, включая таблицы."""
+    try:
+        from docx import Document as DocxDocument
+    except Exception:
+        logger.error("python-docx не установлен")
+        return ""
+
+    import io
+    text_parts: List[str] = []
+    docx_stream = io.BytesIO(content)
+    doc = DocxDocument(docx_stream)
+
+    # Параграфы
+    for p in doc.paragraphs:
+        if p.text and p.text.strip():
+            text_parts.append(p.text.strip())
+
+    # Таблицы
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            if any(cells):
+                text_parts.append(" | ".join(cells))
+
+    result = "\n".join(text_parts)
+    logger.info(f"✅ Извлечен текст из DOCX {filename}, символов: {len(result)}")
+    return result
+
+
+async def extract_text_from_any(content: bytes, filename: str) -> str:
+    """Определяет тип (docx/pdf) и извлекает текст соответствующим способом."""
+    lower = (filename or "").lower()
+    if lower.endswith('.docx'):
+        return await extract_text_from_docx(content, filename)
+    # default: PDF
+    return await extract_text_from_pdf(content, filename)
 
 
 @retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
@@ -1304,13 +1429,13 @@ async def analyze_documentation(
                 summary="Анализ прерван: клиент отключился во время извлечения текста из ТЗ"
             )
 
-        tz_text = await extract_text_from_pdf(tz_content, tz_document.filename)
+        tz_text = await extract_text_from_any(tz_content, tz_document.filename)
 
         # Handle TU if needed
         has_tu = check_tu and (tu_content is not None or stage in TU_PROMPTS)
         if has_tu:
             logger.info("📄 Adding TU to requirements...")
-            tu_text = await extract_text_from_pdf(tu_content, tu_document.filename) if tu_content else TU_PROMPTS.get(stage, "")
+            tu_text = await extract_text_from_any(tu_content, tu_document.filename) if tu_content else TU_PROMPTS.get(stage, "")
             tz_text += "\n\n=== Технические условия (ТУ) ===\n" + tu_text
 
         # Segment requirements (контролируемая сегментация)
@@ -1343,12 +1468,18 @@ async def analyze_documentation(
         # ============================================================
 
         logger.info("📤 [STEP 4/7] STAGE 2: Converting to low-res and assessing relevance...")
-        doc_images_low = await extract_pdf_pages_as_images(
-            doc_content, doc_document.filename,
-            max_pages=STAGE2_MAX_PAGES, detail=STAGE2_DETAIL, dpi=STAGE2_DPI, quality=STAGE2_QUALITY
+        # Текстовый префильтр страниц
+        page_texts_quick = _extract_page_texts_quick(doc_content, max_pages=STAGE2_MAX_PAGES)
+        candidate_pages = _simple_candidate_pages(requirements, page_texts_quick, per_req=7, cap_total=30)
+        logger.info(f"📄 [STAGE 2] Текстовый префильтр выбрал страницы: {candidate_pages[:10]}{'...' if len(candidate_pages) > 10 else ''}")
+
+        # Извлекаем только выбранные страницы в low-res
+        doc_images_low, page_numbers_kept = await extract_selected_pdf_pages_as_images(
+            doc_content, doc_document.filename, selected_pages=candidate_pages,
+            detail=STAGE2_DETAIL, dpi=STAGE2_DPI, quality=STAGE2_QUALITY
         )
 
-        page_mapping = await assess_page_relevance(pages_metadata, doc_images_low, requirements)
+        page_mapping = await assess_page_relevance(pages_metadata, doc_images_low, requirements, page_numbers=page_numbers_kept)
 
         # ============================================================
         # ЭТАП 4: Подготовка system prompt
@@ -1370,7 +1501,7 @@ async def analyze_documentation(
         for req in requirements:
             req_pages = page_mapping.get(req['number'], [])
             if not req_pages:  # Fallback - первые 20 страниц
-                req_pages = list(range(1, min(21, len(doc_images_low) + 1)))
+                req_pages = page_numbers_kept[:min(20, len(page_numbers_kept))] if page_numbers_kept else list(range(1, min(21, len(doc_images_low) + 1)))
 
             pages_key = tuple(sorted(req_pages))
             page_to_reqs[pages_key].append(req)

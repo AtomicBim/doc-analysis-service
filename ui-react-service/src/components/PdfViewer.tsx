@@ -26,15 +26,26 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
     setCurrentPage(1);
   }
 
+  // Надежная прокрутка к странице с повторными попытками (рендер может задерживаться)
   useEffect(() => {
-    if (page && viewerRef.current) {
+    if (!page || !viewerRef.current) return;
+    let attempts = 0;
+    const maxAttempts = 10;
+    const tryScroll = () => {
+      if (!viewerRef.current) return;
       const pageElement = viewerRef.current.querySelector(`[data-page-number="${page}"]`);
       if (pageElement) {
-        pageElement.scrollIntoView({ behavior: 'smooth' });
+        (pageElement as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
         setCurrentPage(page);
+      } else if (attempts < maxAttempts) {
+        attempts += 1;
+        setTimeout(tryScroll, 200);
       }
-    }
-  }, [page]);
+    };
+    // Небольшая задержка, чтобы дождаться рендера
+    const t = setTimeout(tryScroll, 50);
+    return () => clearTimeout(t);
+  }, [page, numPages, scale, file]);
 
   // Обновляем текст для поиска
   useEffect(() => {
