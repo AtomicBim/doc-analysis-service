@@ -13,12 +13,15 @@ function App() {
 
   const handleAnalysisComplete = (
     newRequirements: Requirement[],
-    newSummary: string,
-    file: File
+    newSummary: string
   ) => {
     setRequirements(newRequirements);
     setSummary(newSummary);
+  };
+
+  const handleDocFileChange = (file: File | null) => {
     setPdfFile(file);
+    setSelectedPage(null); // Сброс выбранной страницы при загрузке нового файла
   };
 
   const handleRequirementSelect = (page: number) => {
@@ -27,7 +30,10 @@ function App() {
 
   return (
     <div className="App">
-      <Header onAnalysisComplete={handleAnalysisComplete} />
+      <Header 
+        onAnalysisComplete={handleAnalysisComplete}
+        onDocFileChange={handleDocFileChange}
+      />
       <main className="App-main">
         <div className="left-panel">
           <RequirementList

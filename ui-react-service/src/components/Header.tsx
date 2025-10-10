@@ -7,14 +7,14 @@ import './Header.css';
 interface HeaderProps {
   onAnalysisComplete: (
     requirements: Requirement[],
-    summary: string,
-    pdfFile: File
+    summary: string
   ) => void;
+  onDocFileChange: (file: File | null) => void;
 }
 
 const API_URL = '/api';
 
-const Header: React.FC<HeaderProps> = ({ onAnalysisComplete }) => {
+const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) => {
   const [stage, setStage] = useState('ФЭ');
   const [checkTu, setCheckTu] = useState(false);
   const [tzFile, setTzFile] = useState<File | null>(null);
@@ -50,7 +50,7 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete }) => {
       });
 
       const { requirements, summary } = response.data;
-      onAnalysisComplete(requirements, summary, docFile);
+      onAnalysisComplete(requirements, summary);
     } catch (err: any) {
       let errorMessage = 'Произошла ошибка при анализе.';
       if (axios.isAxiosError(err) && err.response) {
@@ -65,10 +65,14 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete }) => {
     }
   };
 
-  const handleFileChange = (setter: React.Dispatch<React.SetStateAction<File | null>>) => 
+  const handleFileChange = (setter: React.Dispatch<React.SetStateAction<File | null>>, isDocFile: boolean = false) => 
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files.length > 0) {
-        setter(e.target.files[0]);
+        const file = e.target.files[0];
+        setter(file);
+        if (isDocFile) {
+          onDocFileChange(file); // Показываем PDF сразу
+        }
       }
     };
 
@@ -136,7 +140,7 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete }) => {
                 id="doc-file"
                 className="file-input" 
                 accept=".pdf"
-                onChange={handleFileChange(setDocFile)} 
+                onChange={handleFileChange(setDocFile, true)} 
               />
               <label htmlFor="doc-file" className="file-input-label">
                 {docFile ? 'Изменить файл' : 'Выбрать файл'}
