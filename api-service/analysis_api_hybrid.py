@@ -756,11 +756,12 @@ def get_analysis_system_prompt(stage: str, req_type: str) -> str:
     Возвращает system prompt для анализа документации.
     """
     stage_prompt = PROMPTS.get(stage, PROMPTS["ФЭ"])
-    system_template = STAGE_PROMPTS["system_prompt_template"].format(req_type=req_type)
+    # В system_prompt_template есть необрамленные фигурные скобки (JSON-примеры),
+    # поэтому используем безопасную замену только плейсхолдера {req_type}.
+    system_template_raw = STAGE_PROMPTS["system_prompt_template"]
+    system_template = system_template_raw.replace("{req_type}", req_type)
 
-    return f"""{stage_prompt}
-
-{system_template}"""
+    return f"{stage_prompt}\n\n{system_template}"
 
 
 async def analyze_batch_with_high_detail(
@@ -994,6 +995,10 @@ async def analyze_batch_with_high_detail(
             else:
                 # Пытаемся интерпретировать как единичный объект анализа
                 analyses = [data]
+
+            # Нормализуем тип: если analyses — словарь, оборачиваем его в список
+            if isinstance(analyses, dict):
+                analyses = [analyses]
             req_map = {req['number']: req for req in requirements_batch}
 
             results = []
