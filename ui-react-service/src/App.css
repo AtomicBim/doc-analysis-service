@@ -13,7 +13,7 @@
 
 .App-main {
   display: flex;
-  height: 90vh; /* Оставляем 90% для контента, 10% для хедера */
+  flex: 1; /* Занимаем оставшееся пространство после header */
   overflow: hidden;
   gap: 0;
 }

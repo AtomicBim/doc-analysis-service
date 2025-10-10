@@ -1,10 +1,9 @@
 .header {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
-  padding: 1rem 2rem; /* Уменьшенный padding для компактности */
+  padding: 1rem 2rem;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  max-height: 10vh; /* Максимум 10% высоты экрана */
-  overflow-y: auto; /* Скролл при переполнении */
+  /* Убираем ограничение высоты - пусть header занимает столько, сколько нужно */
 }
 
 .header-content {
