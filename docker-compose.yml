@@ -15,7 +15,7 @@ services:
       - HTTPS_PROXY=socks5://172.17.0.1:10808
       - HTTP_PROXY=socks5://172.17.0.1:10808
       # Исключения для внутренних IP (не ходят через прокси)
-      - NO_PROXY=localhost,127.0.0.1,doc-analysis-ui
+      - NO_PROXY=localhost,127.0.0.1,doc-analysis-ui-react,doc-analysis-api
       - PYTHONUNBUFFERED=1
     volumes:
       # Монтируем .env с API ключами (read-only для безопасности)
@@ -27,29 +27,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # Gradio UI (БЕЗ прокси, работает в корпоративной сети)
-  doc-analysis-ui:
-    build: ./ui-service
-    container_name: doc_analysis_ui
-    restart: unless-stopped
-    ports:
-      - "7861:7861"
-    environment:
-      # ❌ НЕТ прокси - работает напрямую в корпоративной сети
-      - PYTHONUNBUFFERED=1
-      # URL API-сервиса для обращения
-      - API_SERVICE_URL=http://doc-analysis-api:8000
-    networks:
-      - doc-analysis-net
-    depends_on:
-      - doc-analysis-api
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7861/')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   doc-analysis-ui-react:
     build: ./ui-react-service
     container_name: doc_analysis_ui_react

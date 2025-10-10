@@ -14,8 +14,8 @@ interface PageReference {
 }
 
 const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelect }) => {
-  // Извлекаем упоминания листов с обоснованиями из решения
-  const extractPageReferences = (solution: string): PageReference[] => {
+  // Извлекаем упоминания листов из решения и из поля reference
+  const extractPageReferences = (solution: string, referenceField?: string): PageReference[] => {
     const references: PageReference[] = [];
     
     // Regex для поиска упоминаний листов: "на листе 5", "лист 17", "странице 10" и т.д.
@@ -53,7 +53,21 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
       }
     }
     
-    // Если не нашли ничего с помощью regex, пробуем альтернативный подход
+    // Поддержка ссылок из поля reference (если API вернул компактные ссылки)
+    if (referenceField && referenceField.trim()) {
+      // Ищем все номера страниц в строке reference
+      const digits = referenceField.match(/\d{1,4}/g);
+      if (digits) {
+        digits.forEach((d) => {
+          const pageNum = parseInt(d, 10);
+          if (!isNaN(pageNum) && pageNum > 0 && pageNum < 10000) {
+            references.push({ page: pageNum, description: referenceField.trim() });
+          }
+        });
+      }
+    }
+
+    // Если не нашли ничего с помощью regex, пробуем альтернативный подход по предложениям
     if (references.length === 0) {
       // Разбиваем текст на предложения
       const sentences = solution.split(/[.;]+/).filter(s => s.trim());
@@ -134,7 +148,7 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
       ) : (
         <div className="requirements-list">
           {requirements.map((req) => {
-            const pageReferences = extractPageReferences(req.solution_description);
+            const pageReferences = extractPageReferences(req.solution_description, req.reference);
             const statusClass = getStatusColor(req.status);
             const statusIcon = getStatusIcon(req.status);
             
@@ -165,7 +179,11 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
                         <span className="detail-label">Ссылки:</span>
                         <div className="reference-items">
                           {pageReferences.map((ref, idx) => (
-                            <div key={idx} className="reference-item">
+                            <div key={idx} className="reference-item" onClick={(e) => {
+                              e.stopPropagation();
+                              onSelect(ref.page, ref.description);
+                            }}
+                            title={`Перейти к листу ${ref.page}${ref.description ? ` и найти: ${ref.description}` : ''}`}>
                               <div className="reference-info">
                                 <span className="reference-page">Лист {ref.page}</span>
                                 {ref.description && (
@@ -180,7 +198,6 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
                                   e.stopPropagation();
                                   onSelect(ref.page, ref.description);
                                 }}
-                                title={`Перейти к листу ${ref.page} и найти: ${ref.description}`}
                               >
                                 📄 Перейти
                               </button>
