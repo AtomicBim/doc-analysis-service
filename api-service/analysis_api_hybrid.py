@@ -115,9 +115,26 @@ def load_tu_prompts() -> Dict[str, str]:
 
     return tu_prompts
 
+
+def load_requirements_extraction_prompt() -> str:
+    """Загружает промпт для извлечения требований из ТЗ."""
+    prompts_dir = Path(__file__).parent.parent / "prompts"
+    file_path = prompts_dir / "requirements_extraction_prompt.txt"
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            prompt = f.read().strip()
+        logger.info(f"✅ Загружен промпт для извлечения требований")
+        return prompt
+    except FileNotFoundError:
+        logger.error(f"❌ Не найден файл промпта: {file_path}")
+        raise FileNotFoundError(f"Файл промпта не найден: {file_path}")
+
+
 # Загружаем промпты при инициализации
 PROMPTS = load_prompts()
 TU_PROMPTS = load_tu_prompts()
+REQUIREMENTS_EXTRACTION_PROMPT = load_requirements_extraction_prompt()
 
 # ============================
 # PDF PROCESSING ФУНКЦИИ
@@ -1204,36 +1221,8 @@ async def extract_text_from_any(content: bytes, filename: str) -> str:
 @retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
 async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
     """Сегментирует ТЗ на отдельные требования используя GPT."""
-    prompt = f"""Проанализируй следующий текст технического задания (ТЗ) и извлеки из него список требований.
-
-ВАЖНО! ПРАВИЛА СЕГМЕНТАЦИИ:
-1. КАЖДАЯ СТРОКА В ТАБЛИЦЕ ТЗ = ОТДЕЛЬНОЕ ТРЕБОВАНИЕ (даже если строка состоит из нескольких столбцов)
-2. НЕ ОБЪЕДИНЯЙ несколько строк в одно требование
-3. НЕ ДЕЛИ одну строку на несколько требований
-4. Если строка содержит несколько столбцов (например: "Требование | Значение | Примечание"), то текст требования должен включать ВСЕ столбцы через разделитель
-5. Сохраняй оригинальную нумерацию из документа (если есть), иначе присваивай порядковые номера
-
-ФОРМАТ ИЗВЛЕЧЕНИЯ:
-Для каждой строки/требования укажи:
-- number: порядковый номер (целое число, начиная с 1)
-- text: полный текст требования (если таблица - объедини все столбцы через " | ")
-- section: название раздела/категории требования (например: "Архитектура", "Инженерные системы", "Общие требования")
-- trace_id: уникальный ID в формате 'req-{{number}}'
-
-ПРИМЕР ПРАВИЛЬНОЙ СЕГМЕНТАЦИИ:
-Если в ТЗ есть таблица:
-| № | Требование | Значение | Примечание |
-| 1 | Высота потолков | 2.64 м | Для жилых помещений |
-| 2 | Количество этажей | 10 | Включая технический |
-
-То верни:
-{{"requirements": [
-  {{"number": 1, "text": "Высота потолков | 2.64 м | Для жилых помещений", "section": "Архитектура", "trace_id": "req-1"}},
-  {{"number": 2, "text": "Количество этажей | 10 | Включая технический", "section": "Архитектура", "trace_id": "req-2"}}
-]}}
-
-Верни результат СТРОГО в JSON формате:
-{{"requirements": [{{"number": 1, "text": "...", "section": "...", "trace_id": "req-1"}}]}}
+    # Формируем промпт из загруженного шаблона + текст ТЗ
+    prompt = f"""{REQUIREMENTS_EXTRACTION_PROMPT}
 
 Текст ТЗ:
 {tz_text[:10000]}"""  # Ограничиваем до 10000 символов
