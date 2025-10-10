@@ -126,10 +126,9 @@ const Header: React.FC<HeaderProps> = ({
     setCurrentStage('');
 
     const stages = [
-      { name: 'Stage 1: Извлечение метаданных', duration: 20000, progress: 25 },
-      { name: 'Stage 2: Оценка релевантности', duration: 30000, progress: 45 },
-      { name: 'Stage 3: Детальный анализ', duration: 240000, progress: 92 },
-      { name: 'Stage 4: Генерация отчета', duration: 10000, progress: 95 },
+      { name: 'Stage 1: Извлечение метаданных', duration: 20000, progress: 33 },
+      { name: 'Stage 2: Оценка релевантности', duration: 30000, progress: 66 },
+      { name: 'Stage 3: Детальный анализ и генерация отчета', duration: 240000, progress: 95 },
     ];
 
     let currentStageIndex = 0;
@@ -140,12 +139,17 @@ const Header: React.FC<HeaderProps> = ({
         const stage = stages[currentStageIndex];
         elapsed += tick;
         setCurrentStage(stage.name);
-        setAnalysisProgress((prev) => {
-          const target = stage.progress;
-          const step = Math.max(0.5, (target - prev) * 0.05);
-          const next = Math.min(prev + step, target);
-          return Math.min(next, 95);
-        });
+
+        // Вычисляем прогресс для текущей стадии: от предыдущего процента до текущего
+        const prevProgress = currentStageIndex > 0 ? stages[currentStageIndex - 1].progress : 0;
+        const stageRange = stage.progress - prevProgress;
+        const stageElapsed = Math.min(elapsed / stage.duration, 1.0);
+        const currentProgress = prevProgress + (stageRange * stageElapsed);
+
+        setAnalysisProgress(Math.min(currentProgress, 95));
+
+        console.log(`📊 Stage ${currentStageIndex + 1}/${stages.length}: ${stage.name} - Progress: ${currentProgress.toFixed(1)}%`);
+
         if (elapsed >= stage.duration) {
           currentStageIndex++;
           elapsed = 0;

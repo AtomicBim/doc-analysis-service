@@ -1398,9 +1398,9 @@ async def analyze_documentation(
         # ЭТАП 3 [STAGE 1]: Извлечение метаданных страниц
         # ============================================================
 
-        logger.info("📋 [STEP 1/4] STAGE 1: Extracting page metadata...")
+        logger.info("📋 [STEP 1/3] STAGE 1: Extracting page metadata...")
         pages_metadata = await extract_page_metadata(doc_content, doc_document.filename, max_pages=150)
-        
+
         # Создаем mapping: sheet_number → pdf_page_number для навигации
         sheet_to_pdf_mapping = {}
         for page_meta in pages_metadata:
@@ -1408,15 +1408,15 @@ async def analyze_documentation(
             sheet_num = page_meta.get('sheet_number', str(pdf_page))
             if sheet_num and sheet_num != "N/A":
                 sheet_to_pdf_mapping[str(sheet_num)] = pdf_page
-        
+
         logger.info(f"📊 [STAGE 1] Создан mapping листов: {list(sheet_to_pdf_mapping.items())[:10]}...")
 
 
         # ============================================================
-        # ЭТАП 4 [STAGE 2]: Конвертация в низкое качество и оценка релевантности
+        # ЭТАП 2 [STAGE 2]: Конвертация в низкое качество и оценка релевантности
         # ============================================================
 
-        logger.info("📤 [STEP 2/4] STAGE 2: Converting to low-res and assessing relevance...")
+        logger.info("📤 [STEP 2/3] STAGE 2: Converting to low-res and assessing relevance...")
         # Текстовый префильтр страниц
         page_texts_quick = _extract_page_texts_quick(doc_content, max_pages=STAGE2_MAX_PAGES)
         candidate_pages = _simple_candidate_pages(requirements, page_texts_quick, per_req=7, cap_total=30)
@@ -1440,7 +1440,7 @@ async def analyze_documentation(
         # ЭТАП 6 [STAGE 3]: Группировка и анализ с высоким разрешением
         # ============================================================
 
-        logger.info(f"🔍 [STEP 3/4] STAGE 3: Analyzing with high-resolution images...")
+        logger.info(f"🔍 [STEP 3/3] STAGE 3: Analyzing with high-resolution images...")
         analyzed_reqs = []
 
         # Группируем требования по общим страницам для оптимизации
@@ -1501,7 +1501,7 @@ async def analyze_documentation(
         # ЭТАП 7: Генерация сводки
         # ============================================================
 
-        logger.info("📝 [STEP 4/4] Generating summary...")
+        logger.info("📝 [STEP 3/3] Generating summary...")
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected before summary")
             # Возвращаем результаты без summary
