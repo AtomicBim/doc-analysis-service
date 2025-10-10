@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 from config import (
     # Stage 1
     STAGE1_MAX_PAGES, STAGE1_DPI, STAGE1_QUALITY, STAGE1_MAX_PAGES_PER_REQUEST,
-    STAGE1_STAMP_CROP, STAGE1_TOP_RIGHT_CROP, STAGE1_HEADER_CROP,
+    STAGE1_STAMP_CROP, STAGE1_TOP_RIGHT_CROP, STAGE1_HEADER_CROP, STAGE1_BOTTOM_CENTER_CROP,
     # Stage 2
     STAGE2_MAX_PAGES, STAGE2_DPI, STAGE2_QUALITY, STAGE2_DETAIL, STAGE2_MAX_PAGES_PER_REQUEST,
     # Stage 3
@@ -262,11 +262,21 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
                 int(height * STAGE1_HEADER_CROP['bottom'])
             ))
 
+            # Середина внизу (для "Лист N")
+            bottom_center_crop = img.crop((
+                int(width * STAGE1_BOTTOM_CENTER_CROP['left']),
+                int(height * STAGE1_BOTTOM_CENTER_CROP['top']),
+                int(width * STAGE1_BOTTOM_CENTER_CROP['right']),
+                int(height * STAGE1_BOTTOM_CENTER_CROP['bottom'])
+            ))
+
             # Объединяем в одно изображение для компактности
-            combined = Image.new('RGB', (width, int(height * 0.45)))
+            # Увеличиваем высоту для размещения всех 4 областей
+            combined = Image.new('RGB', (width, int(height * 0.55)))
             combined.paste(header_crop, (0, 0))
             combined.paste(top_right_crop, (int(width * 0.7), int(height * 0.1)))
-            combined.paste(stamp_crop, (int(width * 0.7), int(height * 0.25)))
+            combined.paste(bottom_center_crop, (int(width * 0.3), int(height * 0.2)))  # Новая область
+            combined.paste(stamp_crop, (int(width * 0.7), int(height * 0.3)))
 
             img_byte_arr = io.BytesIO()
             combined.save(img_byte_arr, format='JPEG', quality=STAGE1_QUALITY)
@@ -1171,6 +1181,7 @@ class AnalysisResponse(BaseModel):
     req_type: str
     requirements: List[RequirementAnalysis]
     summary: str
+    sheet_to_pdf_mapping: Optional[Dict[str, int]] = {}  # Mapping: sheet_number → pdf_page_number
 
 
 # ============================
@@ -1357,6 +1368,17 @@ async def analyze_documentation(
 
         logger.info("📋 [STEP 1/4] STAGE 1: Extracting page metadata...")
         pages_metadata = await extract_page_metadata(doc_content, doc_document.filename, max_pages=150)
+        
+        # Создаем mapping: sheet_number → pdf_page_number для навигации
+        sheet_to_pdf_mapping = {}
+        for page_meta in pages_metadata:
+            pdf_page = page_meta.get('page')
+            sheet_num = page_meta.get('sheet_number', str(pdf_page))
+            if sheet_num and sheet_num != "N/A":
+                sheet_to_pdf_mapping[str(sheet_num)] = pdf_page
+        
+        logger.info(f"📊 [STAGE 1] Создан mapping листов: {list(sheet_to_pdf_mapping.items())[:10]}...")
+
 
         # ============================================================
         # ЭТАП 4 [STAGE 2]: Конвертация в низкое качество и оценка релевантности
@@ -1503,11 +1525,13 @@ async def analyze_documentation(
         # Возврат результата
         # ============================================================
 
+        # Возвращаем результат с mapping листов
         parsed_result = AnalysisResponse(
             stage=stage,
             req_type="ТЗ",
             requirements=analyzed_reqs,
-            summary=summary
+            summary=summary,
+            sheet_to_pdf_mapping=sheet_to_pdf_mapping  # Новое поле для навигации
         )
 
         logger.info(f"✅ [STEP 2] Анализ завершен успешно. Проанализировано {len(analyzed_reqs)} требований.")

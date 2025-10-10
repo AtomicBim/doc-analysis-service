@@ -24,6 +24,9 @@ function App() {
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const [highlightText, setHighlightText] = useState<string>('');
   const [pageChangeKey, setPageChangeKey] = useState<number>(0);
+  
+  // Mapping номеров листов на чертежах → порядковые номера страниц в PDF
+  const [sheetToPdfMapping, setSheetToPdfMapping] = useState<Record<string, number>>({});
 
   // Шаг 1: Обработка извлеченных требований
   const handleRequirementsExtracted = (reqs: EditableRequirement[]) => {
@@ -47,10 +50,15 @@ function App() {
   // Шаг 2: Завершение анализа
   const handleAnalysisComplete = (
     newRequirements: Requirement[],
-    newSummary: string
+    newSummary: string,
+    mapping?: Record<string, number>
   ) => {
     setRequirements(newRequirements);
     setSummary(newSummary);
+    if (mapping) {
+      setSheetToPdfMapping(mapping);
+      console.log('📊 Получен mapping листов:', mapping);
+    }
   };
 
   const handleDocFileChange = (file: File | null) => {
@@ -75,6 +83,7 @@ function App() {
     setPdfFile(null);
     setSelectedPage(null);
     setHighlightText('');
+    setSheetToPdfMapping({});
   };
 
   return (
@@ -99,6 +108,7 @@ function App() {
             <RequirementList
               requirements={requirements}
               onSelect={handleRequirementSelect}
+              sheetToPdfMapping={sheetToPdfMapping}
             />
           ) : (
             <div className="empty-state">

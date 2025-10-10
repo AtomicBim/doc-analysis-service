@@ -9,7 +9,8 @@ interface HeaderProps {
   onRequirementsExtracted: (requirements: EditableRequirement[]) => void;
   onAnalysisComplete: (
     requirements: Requirement[],
-    summary: string
+    summary: string,
+    sheetToPdfMapping?: Record<string, number>
   ) => void;
   onDocFileChange: (file: File | null) => void;
   confirmedRequirements: EditableRequirement[] | null;
@@ -165,8 +166,9 @@ const Header: React.FC<HeaderProps> = ({
       setAnalysisProgress(100);
       setCurrentStage('Завершено');
 
-      const { requirements, summary } = response.data;
-      onAnalysisComplete(requirements, summary);
+      const { requirements, summary, sheet_to_pdf_mapping } = response.data;
+      console.log('📄 Получены данные анализа:', { requirements: requirements.length, mapping: sheet_to_pdf_mapping });
+      onAnalysisComplete(requirements, summary, sheet_to_pdf_mapping);
     } catch (err: any) {
       clearInterval(progressInterval);
       let errorMessage = 'Произошла ошибка при анализе.';

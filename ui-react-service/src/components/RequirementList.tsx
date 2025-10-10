@@ -6,24 +6,29 @@ import './RequirementList.css';
 interface RequirementListProps {
   requirements: Requirement[];
   onSelect: (page: number, highlightText?: string) => void;
+  sheetToPdfMapping?: Record<string, number>;  // Mapping: sheet_number → pdf_page_number
 }
 
 interface PageReference {
-  page: number;
+  page: number;  // PDF page number (порядковый номер для навигации)
+  sheetNumber: string;  // Sheet number (реальный номер листа для отображения)
   description: string;
 }
 
-const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelect }) => {
+const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelect, sheetToPdfMapping = {} }) => {
+  console.log('🗺️ RequirementList получил mapping:', sheetToPdfMapping);
+  
   // Извлекаем упоминания листов из решения и из поля reference
   const extractPageReferences = (solution: string, referenceField?: string): PageReference[] => {
     const references: PageReference[] = [];
     
-    // Regex для поиска упоминаний листов: "на листе 5", "лист 17", "странице 10" и т.д.
-    const pageRegex = /(?:на\s+)?(?:лист[е]?|страниц[ае])\s+(\d+)\s*[-–—]?\s*([^.;]*(?:[.;][^;.]*?(?=(?:лист[е]?|страниц[ае]|\d+\s*[-–—]|$)))?)/gi;
+    // Regex для поиска упоминаний листов:
+    // Захватывает: "лист 5", "Лист АР-03", "странице 26", "лист КР-05.1" и т.д.
+    const pageRegex = /(?:на\s+)?(?:лист[е]?|страниц[ае])\s+([\w\d]+(?:[-–—.]\w*)*)\s*[-–—]?\s*([^.;]*(?:[.;][^;.]*?(?=(?:лист[е]?|страниц[ае]|[\w\d]+\s*[-–—]|$)))?)/gi;
     
     let match;
     while ((match = pageRegex.exec(solution)) !== null) {
-      const pageNum = parseInt(match[1], 10);
+      const sheetRef = match[1].trim();  // Может быть "5", "АР-03", "26" и т.д.
       let description = match[2] ? match[2].trim() : '';
       
       // Очищаем описание от лишних символов
@@ -48,9 +53,30 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
         description = description.substring(0, 147) + '...';
       }
       
-      // Валидация: разумный диапазон страниц (1-500)
-      if (pageNum && pageNum > 0 && pageNum < 500) {
-        references.push({ page: pageNum, description });
+      // Ищем соответствие в mapping
+      let pdfPageNum: number | null = null;
+      
+      // Пробуем найти точное совпадение
+      if (sheetToPdfMapping[sheetRef]) {
+        pdfPageNum = sheetToPdfMapping[sheetRef];
+        console.log(`✅ Найдено соответствие: ${sheetRef} → страница ${pdfPageNum}`);
+      } else {
+        // Fallback: если это число, используем как есть
+        const numericPage = parseInt(sheetRef, 10);
+        if (!isNaN(numericPage) && numericPage > 0 && numericPage < 500) {
+          pdfPageNum = numericPage;
+          console.log(`⚠️ Используем fallback для листа ${sheetRef} → страница ${pdfPageNum}`);
+        } else {
+          console.warn(`❌ Не найден mapping для листа: ${sheetRef}`);
+        }
+      }
+      
+      if (pdfPageNum) {
+        references.push({ 
+          page: pdfPageNum,  // PDF page number для навигации
+          sheetNumber: sheetRef,  // Реальный номер листа для отображения
+          description 
+        });
       }
     }
     
@@ -189,9 +215,9 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
                               e.stopPropagation();
                               onSelect(ref.page, ref.description);
                             }}
-                            title={`Перейти к листу ${ref.page}${ref.description ? ` и найти: ${ref.description}` : ''}`}>
+                            title={`Перейти к листу ${ref.sheetNumber}${ref.description ? ` и найти: ${ref.description}` : ''}`}>
                               <div className="reference-info">
-                                <span className="reference-page">Лист {ref.page}</span>
+                                <span className="reference-page">Лист {ref.sheetNumber}</span>
                                 {ref.description && (
                                   <span className="reference-description">
                                     {ref.description}
