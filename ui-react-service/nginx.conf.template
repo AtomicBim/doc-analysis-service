@@ -2,23 +2,16 @@ server {
     listen 80;
     server_name localhost;
 
-    # Правильные MIME types для JavaScript модулей
+    # Включаем стандартные MIME types и добавляем .mjs
+    include /etc/nginx/mime.types;
     types {
-        application/javascript js mjs;
-        text/css css;
-        text/html html;
+        application/javascript mjs;
     }
 
     location / {
         root   /usr/share/nginx/html;
         index  index.html index.htm;
         try_files $uri $uri/ /index.html;
-        
-        # Принудительно устанавливаем MIME type для .mjs файлов
-        location ~* \.mjs$ {
-            types { }
-            default_type application/javascript;
-        }
     }
 
     location /api/ {
