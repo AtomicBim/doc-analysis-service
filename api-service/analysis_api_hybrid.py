@@ -708,6 +708,58 @@ async def find_contradictions(
         return f"⚠️ ОШИБКА АНАЛИЗА ПРОТИВОРЕЧИЙ\n\nНе удалось выполнить анализ: {str(e)}"
 
 
+def normalize_status_confidence(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Нормализует несогласованности между status и confidence.
+    
+    Правила:
+    - "Полностью исполнено" → confidence >= 70%
+    - "Частично исполнено" → confidence 40-80%
+    - "Не исполнено" → confidence >= 60% (уверены, что НЕ исполнено)
+    - "Требует уточнения" → confidence <= 40%
+    """
+    status = analysis.get('status', '')
+    confidence = analysis.get('confidence', 0)
+    
+    # Нормализуем confidence в диапазон 0-100
+    if confidence < 0:
+        confidence = 0
+    elif confidence > 100:
+        confidence = 100
+    
+    # Проверяем и корректируем несогласованности
+    if status == "Полностью исполнено":
+        if confidence < 70:
+            # Низкая уверенность для "полностью исполнено" - меняем статус
+            logger.warning(f"⚠️ Несогласованность: status='Полностью исполнено', confidence={confidence}. Исправляем статус на 'Частично исполнено'")
+            analysis['status'] = "Частично исполнено"
+            
+    elif status == "Требует уточнения":
+        if confidence > 40:
+            # Высокая уверенность для "требует уточнения" - корректируем
+            logger.warning(f"⚠️ Несогласованность: status='Требует уточнения', confidence={confidence}. Снижаем confidence до 30%")
+            analysis['confidence'] = 30
+            
+    elif status == "Частично исполнено":
+        # Приводим к разумным границам
+        if confidence < 40:
+            analysis['confidence'] = 40
+        elif confidence > 80:
+            # Слишком высокая уверенность - возможно "полностью исполнено"
+            logger.warning(f"⚠️ Несогласованность: status='Частично исполнено', confidence={confidence}. Меняем на 'Полностью исполнено'")
+            analysis['status'] = "Полностью исполнено"
+            
+    elif status == "Не исполнено":
+        # Для "не исполнено" confidence показывает уверенность в отсутствии
+        if confidence < 50:
+            # Низкая уверенность - возможно требует уточнения
+            logger.warning(f"⚠️ Несогласованность: status='Не исполнено', confidence={confidence}. Меняем на 'Требует уточнения'")
+            analysis['status'] = "Требует уточнения"
+            analysis['confidence'] = confidence
+    
+    return analysis
+
+
 def get_analysis_system_prompt(stage: str, req_type: str) -> str:
     """
     Возвращает system prompt для анализа документации.
@@ -924,8 +976,10 @@ async def analyze_batch_with_high_detail(
                 req_num = analysis.get('number')
                 if req_num in req_map:
                     req = req_map[req_num]
+                    # Нормализуем несогласованности между status и confidence
+                    normalized_analysis = normalize_status_confidence(analysis)
                     results.append(RequirementAnalysis(
-                        **analysis,
+                        **normalized_analysis,
                         section=req.get('section'),
                         trace_id=req['trace_id']
                     ))

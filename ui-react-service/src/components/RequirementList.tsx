@@ -22,6 +22,38 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
   const extractPageReferences = (solution: string, referenceField?: string): PageReference[] => {
     const references: PageReference[] = [];
     
+    // СНАЧАЛА парсим поле reference - там точные ссылки от API
+    if (referenceField && referenceField.trim() && referenceField !== '-') {
+      // Парсим обозначения листов: "АР-01", "5", "КР-03.1" и т.д.
+      const sheetRefs = referenceField.match(/[\w\d]+(?:[-–—.]\w*)*/g) || [];
+      
+      sheetRefs.forEach(sheetRef => {
+        let pdfPageNum: number | null = null;
+        
+        // Ищем в mapping
+        if (sheetToPdfMapping[sheetRef]) {
+          pdfPageNum = sheetToPdfMapping[sheetRef];
+          console.log(`✅ [reference] ${sheetRef} → страница ${pdfPageNum}`);
+        } else {
+          // Fallback: если это число
+          const numericPage = parseInt(sheetRef, 10);
+          if (!isNaN(numericPage) && numericPage > 0 && numericPage < 500) {
+            pdfPageNum = numericPage;
+            console.log(`⚠️ [reference fallback] ${sheetRef} → страница ${pdfPageNum}`);
+          }
+        }
+        
+        if (pdfPageNum && !references.some(r => r.page === pdfPageNum)) {
+          references.push({
+            page: pdfPageNum,
+            sheetNumber: sheetRef,
+            description: solution.substring(0, 100).trim() + '...'  // Краткое описание из начала решения
+          });
+        }
+      });
+    }
+    
+    // ПОТОМ парсим текст решения для дополнительных ссылок
     // Regex для поиска упоминаний листов:
     // Захватывает: "лист 5", "Лист АР-03", "странице 26", "лист КР-05.1" и т.д.
     const pageRegex = /(?:на\s+)?(?:лист[е]?|страниц[ае])\s+([\w\d]+(?:[-–—.]\w*)*)\s*[-–—]?\s*([^.;]*(?:[.;][^;.]*?(?=(?:лист[е]?|страниц[ае]|[\w\d]+\s*[-–—]|$)))?)/gi;
@@ -71,70 +103,42 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
         }
       }
       
-      if (pdfPageNum) {
+      if (pdfPageNum && !references.some(r => r.page === pdfPageNum)) {
+        // Улучшаем description - извлекаем ключевые слова из контекста
+        let betterDescription = description;
+        if (!description || description.length < 20) {
+          // Ищем существительные и технические термины рядом с упоминанием листа
+          const context = solution.substring(Math.max(0, match.index - 50), match.index + 150);
+          const keywords = context.match(/[А-ЯЁ][а-яё]+(?:\s+[а-яё]+){0,3}/g);
+          if (keywords && keywords.length > 0) {
+            betterDescription = keywords.slice(0, 3).join(', ');
+          }
+        }
+        
         references.push({ 
           page: pdfPageNum,  // PDF page number для навигации
           sheetNumber: sheetRef,  // Реальный номер листа для отображения
-          description 
-        });
-      }
-    }
-    
-    // Поддержка ссылок из поля reference (если API вернул компактные ссылки)
-    if (referenceField && referenceField.trim() && referenceField !== '-') {
-      // Ищем все номера страниц в строке reference
-      const digits = referenceField.match(/\d{1,3}/g);
-      if (digits) {
-        digits.forEach((d) => {
-          const pageNum = parseInt(d, 10);
-          // Валидация: разумный диапазон страниц (1-500)
-          if (!isNaN(pageNum) && pageNum > 0 && pageNum < 500) {
-            // Проверяем, нет ли уже такой страницы
-            if (!references.some(r => r.page === pageNum)) {
-              references.push({ 
-                page: pageNum, 
-                sheetNumber: d,  // Используем найденную цифру как номер листа
-                description: referenceField.trim() 
-              });
-            }
-          }
+          description: betterDescription || solution.substring(0, 80).trim()
         });
       }
     }
 
-    // Если не нашли ничего с помощью regex, пробуем альтернативный подход по предложениям
-    if (references.length === 0) {
-      // Разбиваем текст на предложения
-      const sentences = solution.split(/[.;]+/).filter(s => s.trim());
-      
-      sentences.forEach(sentence => {
-        const simplePageRegex = /(?:лист[е]?|страниц[ае])\s+(\d+)/i;
-        const match = sentence.match(simplePageRegex);
-        
-        if (match) {
-          const pageNum = parseInt(match[1], 10);
-          let description = sentence.trim();
-          
-          // Убираем начало предложения до упоминания листа
-          const pageIndex = description.search(simplePageRegex);
-          if (pageIndex > 0) {
-            description = description.substring(pageIndex + match[0].length).trim();
-          }
-          
-          if (description.length > 150) {
-            description = description.substring(0, 147) + '...';
-          }
-          
-          // Валидация: разумный диапазон страниц (1-500)
-          if (pageNum && pageNum > 0 && pageNum < 500) {
-            references.push({ 
-              page: pageNum, 
-              sheetNumber: match[1],  // Используем найденную цифру как номер листа
-              description: description || sentence.trim() 
+    // Если ничего не найдено - попробуем простой поиск числовых ссылок
+    if (references.length === 0 && referenceField && referenceField !== '-') {
+      console.log('⚠️ Regex не нашел ссылок, пробуем простой поиск в reference field');
+      const simpleNumbers = referenceField.match(/\b\d{1,3}\b/g);
+      if (simpleNumbers) {
+        simpleNumbers.forEach(numStr => {
+          const pageNum = parseInt(numStr, 10);
+          if (pageNum > 0 && pageNum < 500 && !references.some(r => r.page === pageNum)) {
+            references.push({
+              page: pageNum,
+              sheetNumber: numStr,
+              description: solution.substring(0, 100).trim() + '...'
             });
           }
-        }
-      });
+        });
+      }
     }
     
     // Удаляем дубликаты по номеру страницы
