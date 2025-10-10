@@ -259,6 +259,50 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
 
     crops = await asyncio.to_thread(_extract_crops)
 
+    # Функция для обработки одного батча с retry
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def process_batch_with_retry(batch_crops: List[Dict], batch_start: int, batch_end: int) -> List[Dict[str, Any]]:
+        """Обработка батча страниц с retry при ошибках"""
+        content = [{
+            "type": "text",
+            "text": STAGE_PROMPTS["stage1_metadata"]
+        }]
+
+        # Добавляем изображения батча
+        for item in batch_crops:
+            content.append({
+                "type": "text",
+                "text": f"\n--- Страница {item['page_number']} ---"
+            })
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{item['image']}",
+                    "detail": "low"
+                }
+            })
+
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": content}],
+            response_format={"type": "json_object"},
+            max_completion_tokens=4000
+        )
+
+        response_text = response.choices[0].message.content
+        if not response_text or not response_text.strip():
+            raise ValueError(f"Empty response from OpenAI for batch {batch_start}-{batch_end}")
+
+        try:
+            data = json.loads(response_text)
+            batch_metadata = data.get('pages', [])
+            logger.info(f"✅ [STAGE 1] Батч {batch_start}-{batch_end}: извлечено {len(batch_metadata)} метаданных")
+            return batch_metadata
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ [STAGE 1] JSON parse error for batch {batch_start}-{batch_end}: {e}")
+            logger.error(f"Response preview: {response_text[:200]}...")
+            raise
+
     # Проверяем лимит страниц (защита от 429 rate limit)
     if len(crops) > STAGE1_MAX_PAGES_PER_REQUEST:
         logger.warning(f"⚠️ [STAGE 1] Слишком много страниц ({len(crops)} > {STAGE1_MAX_PAGES_PER_REQUEST})")
@@ -271,42 +315,15 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
 
             logger.info(f"📄 [STAGE 1] Обработка батча страниц {batch_start+1}-{batch_end}...")
 
-            # Формируем запрос для батча
-            content = [{
-                "type": "text",
-                "text": STAGE_PROMPTS["stage1_metadata"]
-            }]
-
-            # Добавляем изображения батча
-            for item in batch_crops:
-                content.append({
-                    "type": "text",
-                    "text": f"\n--- Страница {item['page_number']} ---"
-                })
-                content.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{item['image']}",
-                        "detail": "low"
-                    }
-                })
-
             try:
-                response = await client.chat.completions.create(
-                    model=OPENAI_MODEL,
-                    messages=[{"role": "user", "content": content}],
-                    response_format={"type": "json_object"},
-                    max_completion_tokens=4000
-                )
-
-                data = json.loads(response.choices[0].message.content)
-                batch_metadata = data.get('pages', [])
+                # Используем функцию с retry
+                batch_metadata = await process_batch_with_retry(batch_crops, batch_start+1, batch_end)
                 all_pages_metadata.extend(batch_metadata)
-                logger.info(f"✅ [STAGE 1] Батч {batch_start+1}-{batch_end}: извлечено {len(batch_metadata)} метаданных")
 
             except Exception as e:
-                logger.error(f"❌ [STAGE 1] Ошибка в батче {batch_start+1}-{batch_end}: {e}")
+                logger.error(f"❌ [STAGE 1] Все попытки для батча {batch_start+1}-{batch_end} провалились: {e}")
                 # Fallback для этого батча
+                logger.warning(f"⚠️ [STAGE 1] Используем fallback для батча {batch_start+1}-{batch_end}")
                 for item in batch_crops:
                     all_pages_metadata.append({
                         "page": item['page_number'],
@@ -321,47 +338,22 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
                         }
                     })
 
-        logger.info(f"✅ [STAGE 1] Извлечено метаданных для {len(all_pages_metadata)} страниц (всего батчей: {(len(crops)-1)//STAGE1_MAX_PAGES_PER_REQUEST + 1})")
+        logger.info(f"✅ [STAGE 1] Извлечено метаданных для {len(all_pages_metadata)} страниц (батчи по {STAGE1_MAX_PAGES_PER_REQUEST})")
         return all_pages_metadata
 
     # Если страниц мало - отправляем одним запросом (оригинальная логика)
     logger.info(f"🔍 [STAGE 1] Анализ метаданных через Vision API...")
 
-    content = [{
-        "type": "text",
-        "text": STAGE_PROMPTS["stage1_metadata"]
-    }]
-
-    # Добавляем изображения метаданных
-    for item in crops:
-        content.append({
-            "type": "text",
-            "text": f"\n--- Страница {item['page_number']} ---"
-        })
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{item['image']}",
-                "detail": "low"
-            }
-        })
-
     try:
-        response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": content}],
-            response_format={"type": "json_object"},
-            max_completion_tokens=4000
-        )
-
-        data = json.loads(response.choices[0].message.content)
-        pages_metadata = data.get('pages', [])
+        # Используем функцию с retry для одиночного запроса
+        pages_metadata = await process_batch_with_retry(crops, 1, len(crops))
         logger.info(f"✅ [STAGE 1] Извлечено метаданных для {len(pages_metadata)} страниц")
         return pages_metadata
 
     except Exception as e:
-        logger.error(f"❌ [STAGE 1] Ошибка извлечения метаданных: {e}")
+        logger.error(f"❌ [STAGE 1] Все попытки извлечения метаданных провалились: {e}")
         # Fallback: возвращаем пустые метаданные
+        logger.warning(f"⚠️ [STAGE 1] Используем fallback для всех {len(crops)} страниц")
         return [{
             "page": i+1,
             "title": f"Страница {i+1}",
