@@ -10,7 +10,6 @@ import asyncio
 import warnings
 from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
-import fitz  # pymupdf
 from tenacity import retry, stop_after_attempt, wait_exponential
 from openai import RateLimitError
 
@@ -23,6 +22,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+
+# Импорт нашего рефакторингового PDF процессора
+from pdf_processor import PDFProcessor, PDFBatchProcessor
 from config import (
     # Stage 1
     STAGE1_MAX_PAGES, STAGE1_DPI, STAGE1_QUALITY, STAGE1_MAX_PAGES_PER_REQUEST,
@@ -143,6 +145,47 @@ STAGE_PROMPTS = load_stage_prompts()
 # PDF PROCESSING ФУНКЦИИ
 # ============================
 
+def _combine_crops_for_metadata(crops: List[str]) -> str:
+    """
+    Объединяет 4 crops (header, top_right, bottom_center, stamp) в одно изображение
+    для компактного анализа метаданных страницы.
+    """
+    import base64
+    from PIL import Image
+    import io
+
+    # Декодируем base64 изображения
+    images = []
+    for crop_b64 in crops:
+        img_data = base64.b64decode(crop_b64)
+        img = Image.open(io.BytesIO(img_data))
+        images.append(img)
+
+    # Предполагаем, что все изображения имеют одинаковый размер
+    # В будущем можно сделать более гибким
+    width, height = images[0].size
+
+    # Создаем комбинированное изображение
+    combined = Image.new('RGB', (width, int(height * 0.55)))
+
+    # Размещаем crops:
+    # - header: верхняя часть (0, 0)
+    combined.paste(images[0], (0, 0))
+
+    # - top_right: правый верхний угол
+    combined.paste(images[1], (int(width * 0.7), int(height * 0.1)))
+
+    # - bottom_center: центр внизу
+    combined.paste(images[2], (int(width * 0.3), int(height * 0.2)))
+
+    # - stamp: правый нижний угол
+    combined.paste(images[3], (int(width * 0.7), int(height * 0.3)))
+
+    # Сохраняем как base64
+    img_byte_arr = io.BytesIO()
+    combined.save(img_byte_arr, format='JPEG', quality=STAGE1_QUALITY)
+    return base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+
 async def extract_selected_pdf_pages_as_images(
     doc_content: bytes,
     filename: str,
@@ -154,36 +197,25 @@ async def extract_selected_pdf_pages_as_images(
     """
     Извлекает ТОЛЬКО выбранные страницы PDF как base64-encoded изображения.
     Возвращает кортеж (images, page_numbers) в той же последовательности.
+
+    Теперь использует оптимизированный PDFBatchProcessor для параллельной обработки.
     """
     logger.info(f"📄 [IMG] Извлечение выбранных страниц из {filename}: {selected_pages[:10]}{'...' if len(selected_pages) > 10 else ''} (detail={detail})")
 
-    def _extract():
-        import base64
-        from PIL import Image
-        import io
+    processor = PDFBatchProcessor(doc_content, filename)
+    images = await processor.extract_pages_batch(selected_pages, dpi, quality)
 
-        doc = fitz.open(stream=doc_content, filetype="pdf")
-        images: List[str] = []
-        page_nums_kept: List[int] = []
+    # Фильтруем пустые результаты (неудачные страницы)
+    valid_images = []
+    valid_page_nums = []
 
-        for page_num in selected_pages:
-            if page_num < 1 or page_num > len(doc):
-                continue
-            page = doc[page_num - 1]
-            pix = page.get_pixmap(dpi=dpi)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    for img, page_num in zip(images, selected_pages):
+        if img:  # Не пустая строка
+            valid_images.append(img)
+            valid_page_nums.append(page_num)
 
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=quality)
-            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
-            images.append(base64_image)
-            page_nums_kept.append(page_num)
-
-        doc.close()
-        logger.info(f"✅ [IMG] Извлечено {len(images)}/{len(selected_pages)} выбранных страниц")
-        return images, page_nums_kept
-
-    return await asyncio.to_thread(_extract)
+    logger.info(f"✅ [IMG] Извлечено {len(valid_images)}/{len(selected_pages)} выбранных страниц")
+    return valid_images, valid_page_nums
 
 
 async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: int = None) -> List[Dict[str, Any]]:
@@ -197,74 +229,33 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
     logger.info(f"📋 [STAGE 1] Извлечение метаданных из {filename}...")
 
     def _extract_crops():
-        import base64
-        from PIL import Image
-        import io
+        # Определяем области для вырезания
+        crop_areas = [
+            STAGE1_HEADER_CROP,       # Заголовок
+            STAGE1_TOP_RIGHT_CROP,    # Правый верхний угол
+            STAGE1_BOTTOM_CENTER_CROP, # Середина внизу
+            STAGE1_STAMP_CROP         # Штамп (правый нижний)
+        ]
 
-        doc = fitz.open(stream=doc_content, filetype="pdf")
-        metadata_images = []
+        with PDFProcessor(doc_content, filename) as processor:
+            metadata_images = []
+            total_pages = min(processor.page_count, max_pages)
 
-        total_pages = min(len(doc), max_pages)
+            for page_num in range(1, total_pages + 1):  # 1-based
+                # Извлекаем все crops для страницы
+                crops = processor.extract_page_crops(page_num, crop_areas, STAGE1_DPI, STAGE1_QUALITY)
 
-        for page_num in range(total_pages):
-            page = doc[page_num]
-            pix = page.get_pixmap(dpi=STAGE1_DPI)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                if len(crops) == 4:
+                    # Объединяем crops в одно изображение для компактности
+                    # Это делается в отдельной функции для читаемости
+                    combined_base64 = _combine_crops_for_metadata(crops)
+                    metadata_images.append({
+                        'page_number': page_num,
+                        'image': combined_base64
+                    })
 
-            # Вырезаем ключевые области для быстрого анализа
-            width, height = img.size
-
-            # Правый нижний угол (штамп)
-            stamp_crop = img.crop((
-                int(width * STAGE1_STAMP_CROP['left']),
-                int(height * STAGE1_STAMP_CROP['top']),
-                int(width * STAGE1_STAMP_CROP['right']),
-                int(height * STAGE1_STAMP_CROP['bottom'])
-            ))
-
-            # Правый верхний угол
-            top_right_crop = img.crop((
-                int(width * STAGE1_TOP_RIGHT_CROP['left']),
-                int(height * STAGE1_TOP_RIGHT_CROP['top']),
-                int(width * STAGE1_TOP_RIGHT_CROP['right']),
-                int(height * STAGE1_TOP_RIGHT_CROP['bottom'])
-            ))
-
-            # Заголовок (верхняя часть)
-            header_crop = img.crop((
-                int(width * STAGE1_HEADER_CROP['left']),
-                int(height * STAGE1_HEADER_CROP['top']),
-                int(width * STAGE1_HEADER_CROP['right']),
-                int(height * STAGE1_HEADER_CROP['bottom'])
-            ))
-
-            # Середина внизу (для "Лист N")
-            bottom_center_crop = img.crop((
-                int(width * STAGE1_BOTTOM_CENTER_CROP['left']),
-                int(height * STAGE1_BOTTOM_CENTER_CROP['top']),
-                int(width * STAGE1_BOTTOM_CENTER_CROP['right']),
-                int(height * STAGE1_BOTTOM_CENTER_CROP['bottom'])
-            ))
-
-            # Объединяем в одно изображение для компактности
-            # Увеличиваем высоту для размещения всех 4 областей
-            combined = Image.new('RGB', (width, int(height * 0.55)))
-            combined.paste(header_crop, (0, 0))
-            combined.paste(top_right_crop, (int(width * 0.7), int(height * 0.1)))
-            combined.paste(bottom_center_crop, (int(width * 0.3), int(height * 0.2)))  # Новая область
-            combined.paste(stamp_crop, (int(width * 0.7), int(height * 0.3)))
-
-            img_byte_arr = io.BytesIO()
-            combined.save(img_byte_arr, format='JPEG', quality=STAGE1_QUALITY)
-            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
-            metadata_images.append({
-                'page_number': page_num + 1,
-                'image': base64_image
-            })
-
-        doc.close()
-        logger.info(f"✅ [STAGE 1] Извлечено метаданных с {len(metadata_images)} страниц")
-        return metadata_images
+            logger.info(f"✅ [STAGE 1] Извлечено метаданных с {len(metadata_images)} страниц")
+            return metadata_images
 
     crops = await asyncio.to_thread(_extract_crops)
 
@@ -523,15 +514,8 @@ async def _analyze_relevance_batch(
 
 def _extract_page_texts_quick(doc_content: bytes, max_pages: int = 200) -> List[str]:
     """Быстро извлекает текст по страницам без OCR (для префильтра)."""
-    texts: List[str] = []
-    doc = fitz.open(stream=doc_content, filetype="pdf")
-    total_pages = min(len(doc), max_pages)
-    for i in range(total_pages):
-        page = doc[i]
-        page_text = page.get_text() or ""
-        texts.append(page_text)
-    doc.close()
-    return texts
+    with PDFProcessor(doc_content, "temp.pdf") as processor:
+        return processor.extract_text_pages(max_pages)
 
 
 def _simple_candidate_pages(requirements: List[Dict[str, Any]], page_texts: List[str], per_req: int = 7, cap_total: int = 30) -> List[int]:
@@ -604,31 +588,16 @@ async def find_contradictions(
     # Извлекаем выбранные страницы в среднем качестве
     logger.info(f"📄 [STAGE 4] Извлечение {len(selected_pages)} ключевых страниц...")
 
-    def _extract_pages():
-        import base64
-        from PIL import Image
-        import io
+    # Используем новый PDFBatchProcessor для параллельного извлечения
+    processor = PDFBatchProcessor(doc_content, "contradictions_analysis.pdf")
+    image_bases = await processor.extract_pages_batch(selected_pages, STAGE4_DPI, STAGE4_QUALITY)
 
-        doc = fitz.open(stream=doc_content, filetype="pdf")
-        images = []
+    doc_images = []
+    for page_num, base64_image in zip(selected_pages, image_bases):
+        if base64_image:  # Только успешные извлечения
+            doc_images.append({'page': page_num, 'image': base64_image})
 
-        for page_num in selected_pages:
-            if page_num < 1 or page_num > len(doc):
-                continue
-            page = doc[page_num - 1]
-            pix = page.get_pixmap(dpi=STAGE4_DPI)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=STAGE4_QUALITY)
-            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
-            images.append({'page': page_num, 'image': base64_image})
-
-        doc.close()
-        logger.info(f"✅ [STAGE 4] Извлечено {len(images)} страниц")
-        return images
-
-    doc_images = await asyncio.to_thread(_extract_pages)
+    logger.info(f"✅ [STAGE 4] Извлечено {len(doc_images)} страниц")
 
     # Формируем summary проанализированных требований
     requirements_summary = "\n".join([
@@ -824,31 +793,13 @@ async def analyze_batch_with_high_detail(
     # Извлекаем только релевантные страницы в высоком качестве
     logger.info(f"📄 [STAGE 3] Извлечение {len(page_numbers)} страниц в высоком качестве...")
 
-    def _extract_pages():
-        import base64
-        from PIL import Image
-        import io
+    # Используем PDFBatchProcessor для параллельного извлечения в высоком качестве
+    processor = PDFBatchProcessor(doc_content, "stage3_analysis.pdf")
+    doc_images_high = await processor.extract_pages_batch(
+        page_numbers, STAGE3_DPI, STAGE3_QUALITY, max_concurrent=3  # Меньше одновременных для высокого качества
+    )
 
-        doc = fitz.open(stream=doc_content, filetype="pdf")
-        images = []
-
-        for page_num in page_numbers:
-            if page_num < 1 or page_num > len(doc):
-                continue
-            page = doc[page_num - 1]  # page_num начинается с 1
-            pix = page.get_pixmap(dpi=STAGE3_DPI)  # Высокое качество
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=STAGE3_QUALITY)  # Высокое качество
-            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
-            images.append(base64_image)
-
-        doc.close()
-        logger.info(f"✅ [STAGE 3] Извлечено {len(images)} страниц в высоком качестве")
-        return images
-
-    doc_images_high = await asyncio.to_thread(_extract_pages)
+    logger.info(f"✅ [STAGE 3] Извлечено {len([img for img in doc_images_high if img])} страниц в высоком качестве")
 
     # Формируем список требований
     requirements_text = "\n\n".join([
@@ -1115,47 +1066,50 @@ async def extract_text_from_pdf(content: bytes, filename: str) -> str:
     import io
 
     text = ""
-    doc = fitz.open(stream=content, filetype="pdf")
-    # Mixed-mode: постранично
-    for page_index, page in enumerate(doc):
-        page_text = page.get_text() or ""
-        if page_text.strip():
-            text += page_text + "\n\n"
-            continue
-        # OCR только для пустых по тексту страниц
-        logger.info(f"📄 OCR страницы {page_index + 1}/{len(doc)} из {filename}")
-        pix = page.get_pixmap(dpi=100)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-        img_byte_arr = io.BytesIO()
-        img.save(img_byte_arr, format='JPEG', quality=70)
-        base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+    with PDFProcessor(content, filename) as processor:
+        # Mixed-mode: постранично
+        for page_index in range(processor.page_count):
+            page = processor.get_page(page_index + 1)  # 1-based
+            page_text = page.get_text() or ""
 
-        response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Извлеки весь текст с этого изображения. Сохрани структуру, номера пунктов, таблицы. Верни только текст без комментариев."
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                        }
-                    ]
-                }
-            ],
-            max_completion_tokens=4000
-        )
-        page_text = response.choices[0].message.content or ""
-        text += f"\n\n--- Страница {page_index + 1} ---\n\n{page_text}"
+            if page_text.strip():
+                text += page_text + "\n\n"
+                continue
+
+            # OCR только для пустых по тексту страниц
+            logger.info(f"📄 OCR страницы {page_index + 1}/{processor.page_count} из {filename}")
+
+            # Используем новый процессор для извлечения изображения
+            images = processor.extract_pages_as_images([page_index + 1], 100, 70)
+            if not images:
+                continue
+
+            base64_image = images[0]
+
+            response = await client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Извлеки весь текст с этого изображения. Сохрани структуру, номера пунктов, таблицы. Верни только текст без комментариев."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                            }
+                        ]
+                    }
+                ],
+                max_completion_tokens=4000
+            )
+            page_text = response.choices[0].message.content or ""
+            text += f"\n\n--- Страница {page_index + 1} ---\n\n{page_text}"
 
     logger.info(f"✅ Извлечен текст из PDF {filename}, символов: {len(text)}")
-
-    doc.close()
 
     if not text.strip():
         logger.error(f"❌ Не удалось извлечь текст из {filename}")

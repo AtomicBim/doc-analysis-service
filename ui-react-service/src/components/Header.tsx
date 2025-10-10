@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { Requirement } from '../types';
 import { EditableRequirement } from './RequirementEditor';
+import FileUpload from './FileUpload';
+import StageSelector from './StageSelector';
 import './Header.css';
 
 interface HeaderProps {
@@ -230,24 +232,12 @@ const Header: React.FC<HeaderProps> = ({
           {/* Шаг 1: Загрузка ТЗ */}
           {currentStep === 1 && (
             <>
-              <div className="control-group">
-                <label className="control-label">
-                  Техническое задание (ТЗ)
-                  {tzFile && <span className="file-name">✓ {tzFile.name}</span>}
-                </label>
-                <div className="file-input-wrapper">
-                  <input 
-                    type="file" 
-                    id="tz-file"
-                    className="file-input" 
-                    accept=".pdf,.docx"
-                    onChange={handleFileChange(setTzFile)} 
-                  />
-                  <label htmlFor="tz-file" className="file-input-label">
-                    {tzFile ? 'Изменить файл' : 'Выбрать файл (PDF или DOCX)'}
-                  </label>
-                </div>
-              </div>
+              <FileUpload
+                label="Техническое задание (ТЗ)"
+                accept=".pdf,.docx"
+                fileName={tzFile?.name}
+                onChange={setTzFile}
+              />
 
               <div className="control-group button-group">
                 <button 
@@ -271,39 +261,19 @@ const Header: React.FC<HeaderProps> = ({
           {/* Шаг 2: Загрузка проектной документации */}
           {currentStep === 2 && (
             <>
-              <div className="control-group">
-                <label className="control-label">Стадия проекта</label>
-                <select 
-                  className="control-input select-input" 
-                  value={stage} 
-                  onChange={(e) => setStage(e.target.value)}
-                  disabled={loading}
-                >
-                  <option value="ГК">Градостроительная концепция</option>
-                  <option value="ФЭ">Форэскизный проект</option>
-                  <option value="ЭП">Эскизный проект</option>
-                </select>
-              </div>
+              <StageSelector
+                value={stage}
+                onChange={setStage}
+                disabled={loading}
+              />
 
-              <div className="control-group">
-                <label className="control-label">
-                  Проектная документация
-                  {docFile && <span className="file-name">✓ {docFile.name}</span>}
-                </label>
-                <div className="file-input-wrapper">
-                  <input 
-                    type="file" 
-                    id="doc-file"
-                    className="file-input" 
-                    accept=".pdf"
-                    onChange={handleFileChange(setDocFile, true)}
-                    disabled={loading}
-                  />
-                  <label htmlFor="doc-file" className="file-input-label">
-                    {docFile ? 'Изменить файл' : 'Выбрать файл проекта (PDF)'}
-                  </label>
-                </div>
-              </div>
+              <FileUpload
+                label="Проектная документация"
+                accept=".pdf"
+                fileName={docFile?.name}
+                onChange={setDocFile}
+                disabled={loading}
+              />
 
               <div className="control-group button-group">
                 <button 

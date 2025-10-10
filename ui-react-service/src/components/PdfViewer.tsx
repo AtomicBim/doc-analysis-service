@@ -1,8 +1,9 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
+import { usePdfSearch } from '../hooks/usePdfSearch';
 import './PdfViewer.css';
 
 // Worker for react-pdf - используем CDN версию, совместимую с react-pdf 10.2.0
@@ -18,8 +19,10 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
   const [numPages, setNumPages] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [scale, setScale] = useState<number>(1.0);
-  const [searchText, setSearchText] = useState<string>('');
   const viewerRef = useRef<HTMLDivElement>(null);
+
+  // Используем custom hook для управления поиском
+  const { searchText, setSearchText, clearSearch } = usePdfSearch({ highlightText, page });
 
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
     setNumPages(numPages);
@@ -47,31 +50,17 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
     return () => clearTimeout(t);
   }, [page, numPages, scale, file]);
 
-  // Обновляем текст для поиска при изменении highlightText или страницы
-  useEffect(() => {
-    if (highlightText) {
-      setSearchText(highlightText);
-      console.log('🔍 Обновлен searchText:', highlightText, 'для страницы', page);
-    } else {
-      // Если highlightText пустой - очищаем поиск
-      setSearchText('');
-    }
-  }, [highlightText, page]);
+  // Оптимизированная подсветка текста на странице
+  const highlightTextOnPage = useCallback(() => {
+    if (!viewerRef.current || !searchText || !page) return;
 
-  // Подсветка текста на странице (работает только с текстовым слоем PDF)
-  useEffect(() => {
-    if (!viewerRef.current) return;
-
-    // ВСЕГДА сначала очищаем ВСЕ предыдущие подсветки на ВСЕХ страницах
+    // Очищаем предыдущие подсветки
     const allTextLayers = viewerRef.current.querySelectorAll('.textLayer');
     allTextLayers.forEach(textLayer => {
       textLayer.querySelectorAll('.highlighted-text').forEach(el => {
         el.classList.remove('highlighted-text');
       });
     });
-
-    // Если нет текста для поиска или страницы - выходим после очистки
-    if (!searchText || !page) return;
 
     // Даем время на отрисовку текстового слоя
     const timer = setTimeout(() => {
@@ -87,11 +76,11 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
       // Ищем текст для подсветки (нечувствительно к регистру)
       const searchLower = searchText.toLowerCase();
       const textElements = textLayer.querySelectorAll('span[role="presentation"]');
-      
+
       let foundAny = false;
       textElements.forEach(span => {
         const text = span.textContent?.toLowerCase() || '';
-        
+
         // Проверяем, содержит ли элемент искомый текст
         if (text.includes(searchLower)) {
           span.classList.add('highlighted-text');
@@ -112,7 +101,13 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
     }, 500); // Даем время на рендеринг текстового слоя
 
     return () => clearTimeout(timer);
-  }, [searchText, page, highlightText]);  // Добавили highlightText в зависимости
+  }, [searchText, page]);
+
+  // Запускаем подсветку при изменении searchText или page
+  useEffect(() => {
+    const cleanup = highlightTextOnPage();
+    return cleanup;
+  }, [highlightTextOnPage]);
 
   const handleZoomIn = () => {
     setScale(prev => Math.min(prev + 0.2, 3.0));
@@ -161,9 +156,9 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
             ↺
           </button>
           {searchText && (
-            <button 
-              className="toolbar-button clear-search" 
-              onClick={() => setSearchText('')}
+            <button
+              className="toolbar-button clear-search"
+              onClick={clearSearch}
               title="Очистить поиск"
             >
               ✕
