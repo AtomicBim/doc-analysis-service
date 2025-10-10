@@ -43,6 +43,8 @@
 **stage3_detailed_analysis_prompt.txt:**
 - `{requirements_text}` - список требований для анализа
 - `{requirements_count}` - количество требований
+- `{available_pages}` - список номеров доступных страниц (через запятую)
+- `{page_count}` - количество доступных страниц
 
 **stage4_contradictions_prompt.txt:**
 - `{requirements_summary}` - краткая сводка проанализированных требований

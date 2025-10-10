@@ -797,10 +797,15 @@ async def analyze_batch_with_high_detail(
         for req in requirements_batch
     ])
 
+    # Формируем список доступных страниц
+    available_pages_str = ", ".join(map(str, page_numbers))
+
     # Используем загруженный промпт
     prompt_text = STAGE_PROMPTS["stage3_analysis"].format(
         requirements_text=requirements_text,
-        requirements_count=len(requirements_batch)
+        requirements_count=len(requirements_batch),
+        available_pages=available_pages_str,
+        page_count=len(page_numbers)
     )
 
     content = [{
