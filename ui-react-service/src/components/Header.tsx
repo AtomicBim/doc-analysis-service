@@ -22,6 +22,8 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
   const [tuFile, setTuFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [currentStage, setCurrentStage] = useState('');
 
   const handleAnalyze = async () => {
     if (!tzFile || !docFile) {
@@ -31,6 +33,29 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
 
     setLoading(true);
     setError(null);
+    setAnalysisProgress(0);
+    setCurrentStage('');
+
+    // Симуляция прогресса через этапы
+    const stages = [
+      { name: 'Извлечение текста из ТЗ', duration: 30000, progress: 15 }, // 30 сек
+      { name: 'Сегментация требований', duration: 20000, progress: 25 },  // 20 сек
+      { name: 'Stage 1: Извлечение метаданных', duration: 40000, progress: 40 }, // 40 сек
+      { name: 'Stage 2: Оценка релевантности', duration: 60000, progress: 60 }, // 1 мин
+      { name: 'Stage 3: Детальный анализ', duration: 300000, progress: 85 }, // 5 мин
+      { name: 'Stage 4: Поиск противоречий', duration: 60000, progress: 95 }, // 1 мин
+      { name: 'Финализация результатов', duration: 10000, progress: 100 }, // 10 сек
+    ];
+
+    let currentStageIndex = 0;
+    const progressInterval = setInterval(() => {
+      if (currentStageIndex < stages.length) {
+        const stage = stages[currentStageIndex];
+        setCurrentStage(stage.name);
+        setAnalysisProgress(stage.progress);
+        currentStageIndex++;
+      }
+    }, 30000); // Обновление каждые 30 секунд
 
     const formData = new FormData();
     formData.append('stage', stage);
@@ -49,9 +74,14 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
         timeout: 2400000, // 40 minutes
       });
 
+      clearInterval(progressInterval);
+      setAnalysisProgress(100);
+      setCurrentStage('Завершено');
+
       const { requirements, summary } = response.data;
       onAnalysisComplete(requirements, summary);
     } catch (err: any) {
+      clearInterval(progressInterval);
       let errorMessage = 'Произошла ошибка при анализе.';
       if (axios.isAxiosError(err) && err.response) {
         errorMessage = `Ошибка API: ${err.response.status} - ${err.response.data.detail || err.message}`;
@@ -62,6 +92,10 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
       console.error(err);
     } finally {
       setLoading(false);
+      setTimeout(() => {
+        setAnalysisProgress(0);
+        setCurrentStage('');
+      }, 2000);
     }
   };
 
@@ -191,6 +225,42 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
           <div className="error-message">
             <span className="error-icon">⚠️</span>
             <span className="error-text">{error}</span>
+          </div>
+        )}
+
+        {loading && (
+          <div className="progress-container">
+            <div className="progress-header">
+              <span className="progress-title">🔄 Анализ в процессе</span>
+              <span className="progress-percentage">{analysisProgress}%</span>
+            </div>
+            
+            <div className="progress-bar">
+              <div 
+                className="progress-fill" 
+                style={{ 
+                  width: `${analysisProgress}%`,
+                  background: analysisProgress < 30 
+                    ? 'linear-gradient(90deg, #3b82f6, #60a5fa)'
+                    : analysisProgress < 70 
+                    ? 'linear-gradient(90deg, #8b5cf6, #a78bfa)'
+                    : 'linear-gradient(90deg, #10b981, #34d399)'
+                }}
+              >
+                <div className="progress-shimmer"></div>
+              </div>
+            </div>
+            
+            {currentStage && (
+              <div className="progress-stage">
+                <span className="stage-icon">📊</span>
+                <span className="stage-text">{currentStage}</span>
+              </div>
+            )}
+            
+            <div className="progress-info">
+              <small>Это может занять несколько минут. Пожалуйста, не закрывайте страницу.</small>
+            </div>
           </div>
         )}
       </div>
