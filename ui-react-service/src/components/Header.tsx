@@ -127,7 +127,7 @@ const Header: React.FC<HeaderProps> = ({
         headers: {
           'Content-Type': 'multipart/form-data',
         },
-        timeout: 300000, // 5 minutes
+        timeout: 900000, // 15 minutes
       });
 
       clearInterval(progressInterval);
