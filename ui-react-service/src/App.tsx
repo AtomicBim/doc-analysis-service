@@ -4,6 +4,7 @@ import Header from './components/Header';
 import RequirementList from './components/RequirementList';
 import PdfViewer from './components/PdfViewer';
 import RequirementEditor, { EditableRequirement } from './components/RequirementEditor';
+import ResizablePanels from './components/ResizablePanels';
 import { Requirement } from './types';
 
 function App() {
@@ -89,59 +90,74 @@ function App() {
     setAnalysisCompleted(false); // Сбрасываем флаг завершения анализа
   };
 
+  // Компонент Header
+  const headerContent = (
+    <Header 
+      onRequirementsExtracted={handleRequirementsExtracted}
+      onAnalysisComplete={handleAnalysisComplete}
+      onDocFileChange={handleDocFileChange}
+      confirmedRequirements={confirmedRequirements}
+      analysisCompleted={analysisCompleted}
+    />
+  );
+
+  // Левая панель (требования)
+  const leftPanelContent = (
+    <div className="panel-content">
+      {currentStep === 1 ? (
+        <div className="empty-state">
+          <div className="empty-icon">📋</div>
+          <p className="empty-text">Загрузите ТЗ для начала работы</p>
+          <p className="empty-hint">
+            Требования будут извлечены и показаны для редактирования
+          </p>
+        </div>
+      ) : requirements.length > 0 ? (
+        <RequirementList
+          requirements={requirements}
+          onSelect={handleRequirementSelect}
+          sheetToPdfMapping={sheetToPdfMapping}
+        />
+      ) : (
+        <div className="empty-state">
+          <div className="empty-icon">📊</div>
+          <p className="empty-text">Загрузите проектную документацию</p>
+          <p className="empty-hint">
+            Проект будет проверен по {confirmedRequirements?.filter(r => r.selected).length} требованиям
+          </p>
+        </div>
+      )}
+    </div>
+  );
+
+  // Правая панель (PDF + сводка)
+  const rightPanelContent = (
+    <div className="panel-content">
+      <PdfViewer 
+        file={pdfFile} 
+        page={selectedPage} 
+        highlightText={highlightText}
+        key={pageChangeKey}
+      />
+      {summary && (
+        <div className="summary-container">
+          <h3>Общая сводка</h3>
+          <pre>{summary}</pre>
+          <button className="btn-reset" onClick={handleReset}>
+            🔄 Начать заново
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="App">
-      <Header 
-        onRequirementsExtracted={handleRequirementsExtracted}
-        onAnalysisComplete={handleAnalysisComplete}
-        onDocFileChange={handleDocFileChange}
-        confirmedRequirements={confirmedRequirements}
-        analysisCompleted={analysisCompleted}
+      <ResizablePanels
+        header={headerContent}
+        leftPanel={leftPanelContent}
+        rightPanel={rightPanelContent}
       />
-      <main className="App-main">
-        <div className="left-panel">
-          {currentStep === 1 ? (
-            <div className="empty-state">
-              <div className="empty-icon">📋</div>
-              <p className="empty-text">Загрузите ТЗ для начала работы</p>
-              <p className="empty-hint">
-                Требования будут извлечены и показаны для редактирования
-              </p>
-            </div>
-          ) : requirements.length > 0 ? (
-            <RequirementList
-              requirements={requirements}
-              onSelect={handleRequirementSelect}
-              sheetToPdfMapping={sheetToPdfMapping}
-            />
-          ) : (
-            <div className="empty-state">
-              <div className="empty-icon">📊</div>
-              <p className="empty-text">Загрузите проектную документацию</p>
-              <p className="empty-hint">
-                Проект будет проверен по {confirmedRequirements?.filter(r => r.selected).length} требованиям
-              </p>
-            </div>
-          )}
-        </div>
-        <div className="right-panel">
-          <PdfViewer 
-            file={pdfFile} 
-            page={selectedPage} 
-            highlightText={highlightText}
-            key={pageChangeKey}
-          />
-          {summary && (
-            <div className="summary-container">
-              <h3>Общая сводка</h3>
-              <pre>{summary}</pre>
-              <button className="btn-reset" onClick={handleReset}>
-                🔄 Начать заново
-              </button>
-            </div>
-          )}
-        </div>
-      </main>
 
       {/* Модальное окно редактора требований */}
       {showRequirementEditor && extractedRequirements && (
