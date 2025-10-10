@@ -43,6 +43,56 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
     }
   }, [highlightText]);
 
+  // Подсветка текста на странице (работает только с текстовым слоем PDF)
+  useEffect(() => {
+    if (!searchText || !page || !viewerRef.current) return;
+
+    // Даем время на отрисовку текстового слоя
+    const timer = setTimeout(() => {
+      const pageWrapper = viewerRef.current?.querySelector(`[data-page-number="${page}"]`);
+      if (!pageWrapper) return;
+
+      const textLayer = pageWrapper.querySelector('.textLayer');
+      if (!textLayer) {
+        console.log('Текстовый слой не найден. PDF может содержать только изображения.');
+        return;
+      }
+
+      // Убираем предыдущую подсветку
+      textLayer.querySelectorAll('.highlighted-text').forEach(el => {
+        el.classList.remove('highlighted-text');
+      });
+
+      // Ищем текст для подсветки (нечувствительно к регистру)
+      const searchLower = searchText.toLowerCase();
+      const textElements = textLayer.querySelectorAll('span[role="presentation"]');
+      
+      let foundAny = false;
+      textElements.forEach(span => {
+        const text = span.textContent?.toLowerCase() || '';
+        
+        // Проверяем, содержит ли элемент искомый текст
+        if (text.includes(searchLower)) {
+          span.classList.add('highlighted-text');
+          foundAny = true;
+        }
+      });
+
+      if (foundAny) {
+        // Прокручиваем к первому найденному элементу
+        const firstHighlight = textLayer.querySelector('.highlighted-text');
+        if (firstHighlight) {
+          firstHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        console.log('Текст найден и подсвечен на странице', page);
+      } else {
+        console.log('Текст не найден на странице', page, 'Возможно, PDF содержит только изображения.');
+      }
+    }, 500); // Даем время на рендеринг текстового слоя
+
+    return () => clearTimeout(timer);
+  }, [searchText, page]);
+
   const handleZoomIn = () => {
     setScale(prev => Math.min(prev + 0.2, 3.0));
   };

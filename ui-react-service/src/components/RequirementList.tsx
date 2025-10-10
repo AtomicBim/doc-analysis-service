@@ -8,42 +8,87 @@ interface RequirementListProps {
   onSelect: (page: number, highlightText?: string) => void;
 }
 
+interface PageReference {
+  page: number;
+  description: string;
+}
+
 const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelect }) => {
-  // Извлекаем ВСЕ номера страниц из ссылки
-  const extractPageNumbers = (reference: string): number[] => {
-    const pages: number[] = [];
+  // Извлекаем упоминания листов с обоснованиями из решения
+  const extractPageReferences = (solution: string): PageReference[] => {
+    const references: PageReference[] = [];
     
-    // Ищем все числа после "страница", "лист", "стр.", "с."
-    const pageRegex = /(?:страниц[аы]|лист|стр\.|с\.)\s*(\d+)/gi;
+    // Regex для поиска упоминаний листов: "на листе 5", "лист 17", "странице 10" и т.д.
+    const pageRegex = /(?:на\s+)?(?:лист[е]?|страниц[ае])\s+(\d+)\s*[-–—]?\s*([^.;]*(?:[.;][^;.]*?(?=(?:лист[е]?|страниц[ае]|\d+\s*[-–—]|$)))?)/gi;
+    
     let match;
-    while ((match = pageRegex.exec(reference)) !== null) {
+    while ((match = pageRegex.exec(solution)) !== null) {
       const pageNum = parseInt(match[1], 10);
-      if (pageNum && !pages.includes(pageNum)) {
-        pages.push(pageNum);
-      }
-    }
-    
-    // Если не нашли с ключевыми словами, ищем просто числа
-    if (pages.length === 0) {
-      const numberRegex = /\b(\d+)\b/g;
-      let numberMatch;
-      while ((numberMatch = numberRegex.exec(reference)) !== null) {
-        const pageNum = parseInt(numberMatch[1], 10);
-        // Фильтруем слишком большие числа (вероятно не номера страниц)
-        if (pageNum && pageNum < 1000 && !pages.includes(pageNum)) {
-          pages.push(pageNum);
+      let description = match[2] ? match[2].trim() : '';
+      
+      // Очищаем описание от лишних символов
+      description = description.replace(/^[-–—:,;\s]+/, '').replace(/[;.,]+$/, '').trim();
+      
+      // Если описание пустое или слишком короткое, берем контекст после упоминания листа
+      if (!description || description.length < 10) {
+        const startIndex = match.index + match[0].length;
+        const contextLength = 100;
+        const endIndex = Math.min(startIndex + contextLength, solution.length);
+        description = solution.substring(startIndex, endIndex).trim();
+        
+        // Обрезаем до конца предложения
+        const sentenceEnd = description.search(/[.;]/);
+        if (sentenceEnd !== -1) {
+          description = description.substring(0, sentenceEnd).trim();
         }
       }
+      
+      // Если описание все еще слишком длинное, обрезаем
+      if (description.length > 150) {
+        description = description.substring(0, 147) + '...';
+      }
+      
+      if (pageNum && pageNum < 1000) {
+        references.push({ page: pageNum, description });
+      }
     }
     
-    return pages.sort((a, b) => a - b);
-  };
-
-  // Извлекаем текст для highlight (из solution_description)
-  const extractTextForHighlight = (solution: string): string => {
-    // Берем ключевые слова из решения (первые 50 символов)
-    const keywords = solution.substring(0, 50).trim();
-    return keywords;
+    // Если не нашли ничего с помощью regex, пробуем альтернативный подход
+    if (references.length === 0) {
+      // Разбиваем текст на предложения
+      const sentences = solution.split(/[.;]+/).filter(s => s.trim());
+      
+      sentences.forEach(sentence => {
+        const simplePageRegex = /(?:лист[е]?|страниц[ае])\s+(\d+)/i;
+        const match = sentence.match(simplePageRegex);
+        
+        if (match) {
+          const pageNum = parseInt(match[1], 10);
+          let description = sentence.trim();
+          
+          // Убираем начало предложения до упоминания листа
+          const pageIndex = description.search(simplePageRegex);
+          if (pageIndex > 0) {
+            description = description.substring(pageIndex + match[0].length).trim();
+          }
+          
+          if (description.length > 150) {
+            description = description.substring(0, 147) + '...';
+          }
+          
+          if (pageNum && pageNum < 1000) {
+            references.push({ page: pageNum, description: description || sentence.trim() });
+          }
+        }
+      });
+    }
+    
+    // Удаляем дубликаты по номеру страницы
+    const uniqueRefs = references.filter((ref, index, self) => 
+      index === self.findIndex(r => r.page === ref.page)
+    );
+    
+    return uniqueRefs.sort((a, b) => a.page - b.page);
   };
 
   const getStatusColor = (status: string): string => {
@@ -89,7 +134,7 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
       ) : (
         <div className="requirements-list">
           {requirements.map((req) => {
-            const pages = extractPageNumbers(req.reference);
+            const pageReferences = extractPageReferences(req.solution_description);
             const statusClass = getStatusColor(req.status);
             const statusIcon = getStatusIcon(req.status);
             
@@ -114,29 +159,32 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
                       <span className="detail-value">{req.solution_description}</span>
                     </div>
                     
-                    <div className="detail-item">
-                      <span className="detail-label">Ссылка:</span>
-                      <span className="detail-value reference">{req.reference}</span>
-                    </div>
-                    
-                    {/* Кнопки для перехода на каждую страницу */}
-                    {pages.length > 0 && (
-                      <div className="detail-item pages-navigation">
-                        <span className="detail-label">Перейти к листам:</span>
-                        <div className="page-buttons">
-                          {pages.map((pageNum, idx) => (
-                            <button
-                              key={idx}
-                              className="page-button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const textToFind = extractTextForHighlight(req.solution_description);
-                                onSelect(pageNum, textToFind);
-                              }}
-                              title={`Перейти к странице ${pageNum} и выделить текст`}
-                            >
-                              📄 {pageNum}
-                            </button>
+                    {/* Ссылки с обоснованиями */}
+                    {pageReferences.length > 0 && (
+                      <div className="detail-item references-section">
+                        <span className="detail-label">Ссылки:</span>
+                        <div className="reference-items">
+                          {pageReferences.map((ref, idx) => (
+                            <div key={idx} className="reference-item">
+                              <div className="reference-info">
+                                <span className="reference-page">Лист {ref.page}</span>
+                                {ref.description && (
+                                  <span className="reference-description">
+                                    {ref.description}
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                className="reference-button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSelect(ref.page, ref.description);
+                                }}
+                                title={`Перейти к листу ${ref.page} и найти: ${ref.description}`}
+                              >
+                                📄 Перейти
+                              </button>
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -146,13 +194,6 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
                       <div className="detail-item discrepancy">
                         <span className="detail-label">Несоответствия:</span>
                         <span className="detail-value">{req.discrepancies}</span>
-                      </div>
-                    )}
-                    
-                    {req.recommendations && req.recommendations !== '-' && (
-                      <div className="detail-item recommendation">
-                        <span className="detail-label">Рекомендации:</span>
-                        <span className="detail-value">{req.recommendations}</span>
                       </div>
                     )}
                   </div>

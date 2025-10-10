@@ -109,13 +109,22 @@
 }
 
 /* Подсветка текста на PDF (работает с text layer) */
-.pdf-page-wrapper .textLayer > span[role="presentation"]:contains() {
-  position: relative;
+.pdf-page-wrapper .textLayer span[role="presentation"].highlighted-text {
+  background-color: rgba(255, 255, 0, 0.4) !important;
+  border-radius: 2px;
+  padding: 0 2px;
+  box-shadow: 0 0 0 2px rgba(255, 200, 0, 0.3);
+  transition: all 0.3s ease;
+  animation: highlightPulse 1s ease-in-out;
 }
 
-.pdf-page-wrapper.highlight-active .textLayer > span[role="presentation"] {
-  background: transparent;
-  transition: background 0.2s ease;
+@keyframes highlightPulse {
+  0%, 100% {
+    background-color: rgba(255, 255, 0, 0.4);
+  }
+  50% {
+    background-color: rgba(255, 255, 0, 0.7);
+  }
 }
 
 .pdf-viewer-empty {
