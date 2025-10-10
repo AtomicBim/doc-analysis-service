@@ -27,7 +27,13 @@ function App() {
   };
 
   const handleRequirementSelect = (page: number, textToHighlight?: string) => {
-    setSelectedPage(page);
+    // Форсируем перерасчет, даже если выбирают ту же страницу подряд
+    if (selectedPage === page) {
+      setSelectedPage(null);
+      setTimeout(() => setSelectedPage(page), 0);
+    } else {
+      setSelectedPage(page);
+    }
     setHighlightText(textToHighlight || '');
   };
 
