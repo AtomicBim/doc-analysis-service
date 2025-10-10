@@ -91,7 +91,11 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
           if (!isNaN(pageNum) && pageNum > 0 && pageNum < 500) {
             // Проверяем, нет ли уже такой страницы
             if (!references.some(r => r.page === pageNum)) {
-              references.push({ page: pageNum, description: referenceField.trim() });
+              references.push({ 
+                page: pageNum, 
+                sheetNumber: d,  // Используем найденную цифру как номер листа
+                description: referenceField.trim() 
+              });
             }
           }
         });
@@ -123,7 +127,11 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
           
           // Валидация: разумный диапазон страниц (1-500)
           if (pageNum && pageNum > 0 && pageNum < 500) {
-            references.push({ page: pageNum, description: description || sentence.trim() });
+            references.push({ 
+              page: pageNum, 
+              sheetNumber: match[1],  // Используем найденную цифру как номер листа
+              description: description || sentence.trim() 
+            });
           }
         }
       });
