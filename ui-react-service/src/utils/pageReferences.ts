@@ -32,6 +32,7 @@ export function resolveSheetToPdfPage(
 
 /**
  * Извлекает ссылки на страницы из поля reference (точные ссылки от API)
+ * Для каждого листа ищет конкретный текст из решения
  */
 export function extractReferencesFromField(
   referenceField: string,
@@ -51,15 +52,76 @@ export function extractReferencesFromField(
     const pdfPageNum = resolveSheetToPdfPage(sheetRef, sheetToPdfMapping);
 
     if (pdfPageNum && !references.some(r => r.page === pdfPageNum)) {
+      // Ищем конкретный текст для этого листа в решении
+      const sheetSpecificText = extractSheetSpecificDescription(sheetRef, solution);
+
       references.push({
         page: pdfPageNum,
         sheetNumber: sheetRef,
-        description: solution.substring(0, 100).trim() + '...'  // Краткое описание из начала решения
+        description: sheetSpecificText || `Упоминание листа ${sheetRef} в проектной документации`
       });
     }
   });
 
   return references;
+}
+
+/**
+ * Извлекает описание, специфичное для конкретного листа
+ */
+function extractSheetSpecificDescription(sheetRef: string, solution: string): string {
+  // Ищем упоминания конкретного листа в тексте решения
+  const patterns = [
+    // Прямые упоминания типа "на Листе 10", "Лист 10", "лист 10"
+    new RegExp(`(?:на\\s+)?(?:лист[е]?|страниц[ае])\\s+${sheetRef}\\s*([^.;]*(?:[.;][^;.]*?(?=(?:лист[е]?|страниц[ае]|$)))?)`, 'gi'),
+    // Упоминания в скобках типа "(Лист 10)"
+    new RegExp(`\\(Лист\\s+${sheetRef}[^)]*\\)`, 'gi'),
+    // Упоминания с ссылками типа "Лист 10 и Лист 11"
+    new RegExp(`Лист\\s+${sheetRef}(?:\\s+и\\s+Лист\\s+\\d+)?\\s*([^.;]*(?:[.;][^;.]*?(?=(?:лист[е]?|страниц[ае]|$)))?)`, 'gi')
+  ];
+
+  for (const pattern of patterns) {
+    const matches = solution.match(pattern);
+    if (matches && matches.length > 0) {
+      // Берем первое найденное совпадение и очищаем его
+      let description = matches[0].trim();
+
+      // Убираем префикс с номером листа, оставляем только описание
+      description = description.replace(new RegExp(`^(?:на\\s+)?(?:лист[е]?|страниц[ае])\\s+${sheetRef}\\s*[-–—]?\\s*`, 'i'), '');
+      description = description.replace(/^\(Лист\s+\d+[^)]*\)/, '');
+      description = description.replace(/^Лист\s+\d+(?:\s+и\s+Лист\s+\d+)?\s*/, '');
+
+      // Очищаем от лишних символов
+      description = description.replace(/^[-–—:,;\s]+/, '').replace(/[;.,]+$/, '').trim();
+
+      if (description && description.length > 10) {
+        // Обрезаем если слишком длинное
+        if (description.length > 150) {
+          description = description.substring(0, 147) + '...';
+        }
+        return description;
+      }
+    }
+  }
+
+  // Если не нашли специфичный текст, ищем ближайший контекст вокруг упоминания листа
+  const contextPattern = new RegExp(`.{0,50}${sheetRef}.{0,100}`, 'gi');
+  const contextMatch = solution.match(contextPattern);
+  if (contextMatch && contextMatch.length > 0) {
+    let context = contextMatch[0].trim();
+    // Убираем упоминание самого листа и берем текст после него
+    const sheetIndex = context.toLowerCase().indexOf(sheetRef.toLowerCase());
+    if (sheetIndex !== -1) {
+      context = context.substring(sheetIndex + sheetRef.length).trim();
+      context = context.replace(/^[-–—:,;\s]+/, '').replace(/[;.,]+$/, '').trim();
+
+      if (context && context.length > 10) {
+        return context.length > 150 ? context.substring(0, 147) + '...' : context;
+      }
+    }
+  }
+
+  return '';
 }
 
 /**
