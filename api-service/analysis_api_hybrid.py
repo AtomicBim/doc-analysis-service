@@ -11,7 +11,7 @@ import warnings
 from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 import fitz  # pymupdf
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential
 from openai import RateLimitError
 
 # Отключаем warnings о deprecation
@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="openai")
 import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from config import (
@@ -122,45 +122,6 @@ TU_PROMPTS = load_tu_prompts()
 # ============================
 # PDF PROCESSING ФУНКЦИИ
 # ============================
-
-async def extract_pdf_pages_as_images(doc_content: bytes, filename: str, max_pages: int = 150, detail: str = "low", dpi: int = 100, quality: int = 70) -> List[str]:
-    """
-    Извлекает страницы PDF как base64-encoded изображения для Vision API.
-
-    Args:
-        detail: "low" (85 tokens/img) или "high" (765 tokens/img)
-        dpi: качество рендеринга (100 для low, 150 для high)
-        quality: JPEG качество (70 для low, 85 для high)
-    """
-    logger.info(f"📄 [IMG] Извлечение страниц из {filename} (detail={detail}, dpi={dpi}, quality={quality})...")
-
-    def _extract():
-        import base64
-        from PIL import Image
-        import io
-
-        doc = fitz.open(stream=doc_content, filetype="pdf")
-        images = []
-
-        total_pages = min(len(doc), max_pages)
-        logger.info(f"📄 [IMG] Обрабатываем {total_pages} страниц из {len(doc)}")
-
-        for page_num in range(total_pages):
-            page = doc[page_num]
-            pix = page.get_pixmap(dpi=dpi)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=quality)
-            base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
-            images.append(base64_image)
-
-        doc.close()
-        logger.info(f"✅ [IMG] Извлечено {len(images)} страниц")
-        return images
-
-    return await asyncio.to_thread(_extract)
-
 
 async def extract_selected_pdf_pages_as_images(
     doc_content: bytes,
@@ -1357,27 +1318,107 @@ async def root():
     return {
         "status": "ok",
         "service": "Document Analysis API (VISION MODE)",
-        "architecture": "TZ/TU manual parsing + Drawings via Vision API",
+        "architecture": "Two-step: 1) Extract requirements from TZ, 2) Analyze project",
         "provider": "openai",
         "model": OPENAI_MODEL,
         "max_file_size_mb": MAX_FILE_SIZE_MB
     }
 
 
+@app.post("/extract_requirements")
+async def extract_requirements_endpoint(
+    request: Request,
+    tz_document: UploadFile = File(...)
+):
+    """
+    Шаг 1: Извлечение требований из ТЗ.
+    Поддерживает PDF (текст и изображения) и DOCX.
+    
+    Returns:
+        List of requirements with structure:
+        [
+            {
+                "number": 1,
+                "text": "requirement text",
+                "section": "category",
+                "trace_id": "req-1",
+                "selected": true  # по умолчанию все выбраны
+            }
+        ]
+    """
+    try:
+        if await request.is_disconnected():
+            logger.warning("⚠️ Client disconnected before extraction started.")
+            raise HTTPException(status_code=499, detail="Client disconnected")
+        
+        logger.info(f"📋 [STEP 1] Извлечение требований из {tz_document.filename}")
+        
+        # Проверка размера файла
+        file_size = await _get_file_size(tz_document)
+        if file_size > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл {tz_document.filename} слишком большой ({file_size / 1024 / 1024:.2f} MB). Максимум: {MAX_FILE_SIZE_MB} MB"
+            )
+        
+        # Читаем содержимое
+        await tz_document.seek(0)
+        tz_content = await tz_document.read()
+        
+        logger.info(f"📊 File size: {len(tz_content) / 1024:.1f} KB")
+        
+        # Извлекаем текст из документа
+        logger.info("📄 Extracting text from TZ document...")
+        if await request.is_disconnected():
+            logger.warning("⚠️ Client disconnected during text extraction")
+            raise HTTPException(status_code=499, detail="Client disconnected")
+        
+        tz_text = await extract_text_from_any(tz_content, tz_document.filename)
+        
+        # Сегментируем требования
+        logger.info("✂️ Segmenting requirements...")
+        if await request.is_disconnected():
+            logger.warning("⚠️ Client disconnected during segmentation")
+            raise HTTPException(status_code=499, detail="Client disconnected")
+        
+        requirements = await segment_requirements(tz_text)
+        
+        if not requirements:
+            raise HTTPException(status_code=400, detail="No requirements extracted from TZ")
+        
+        # Добавляем поле selected=true для всех требований по умолчанию
+        for req in requirements:
+            req['selected'] = True
+        
+        logger.info(f"✅ Successfully extracted {len(requirements)} requirements")
+        
+        return {
+            "success": True,
+            "total_requirements": len(requirements),
+            "requirements": requirements
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error extracting requirements: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка извлечения требований: {str(e)}")
+
+
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze_documentation(
     request: Request,
     stage: str = Form(...),
-    check_tu: bool = Form(False),
-    req_type: str = Form("ТЗ"),
-    tz_document: UploadFile = File(...),
-    doc_document: UploadFile = File(...),
-    tu_document: Optional[UploadFile] = File(None)
+    requirements_json: str = Form(...),  # JSON string с требованиями из шага 1
+    doc_document: UploadFile = File(...)
 ):
     """
-    Гибридный анализ документации:
-    - ТЗ/ТУ: ручной парсинг и сегментация
-    - Чертежи: Vision API для анализа страниц
+    Шаг 2: Анализ проектной документации по готовым требованиям.
+    
+    Args:
+        stage: Стадия проекта (ГК, ФЭ, ЭП)
+        requirements_json: JSON string с требованиями из шага 1
+        doc_document: Файл проектной документации (PDF)
     """
     try:
         # Проверяем, не отключился ли клиент
@@ -1385,89 +1426,59 @@ async def analyze_documentation(
             logger.warning("⚠️ Client disconnected before analysis started. Aborting.")
             raise HTTPException(status_code=499, detail="Client disconnected")
 
-        logger.info(f"📋 [HYBRID] Получен запрос на анализ. Стадия: {stage}, check_tu: {check_tu}")
+        logger.info(f"📋 [STEP 2] Анализ проектной документации. Стадия: {stage}")
 
         # ============================================================
-        # ЭТАП 1: Парсинг ТЗ/ТУ (ручной, быстрый, контролируемый)
+        # ЭТАП 1: Парсинг требований из JSON
         # ============================================================
+        
+        try:
+            requirements = json.loads(requirements_json)
+            logger.info(f"📋 Получено {len(requirements)} требований из шага 1")
+            
+            # Фильтруем только выбранные требования (selected=true)
+            selected_requirements = [req for req in requirements if req.get('selected', True)]
+            logger.info(f"✅ Выбрано {len(selected_requirements)} требований для анализа")
+            
+            if not selected_requirements:
+                raise HTTPException(status_code=400, detail="No requirements selected for analysis")
+            
+            requirements = selected_requirements
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse requirements JSON: {e}")
+            raise HTTPException(status_code=400, detail="Invalid requirements JSON format")
 
-        # Проверка размера файлов
-        files_to_check = [tz_document, doc_document]
-        if tu_document:
-            files_to_check.append(tu_document)
-
-        for file in files_to_check:
-            file_size = await _get_file_size(file)
-            if file_size > MAX_FILE_SIZE_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Файл {file.filename} слишком большой ({file_size / 1024 / 1024:.2f} MB). Максимум: {MAX_FILE_SIZE_MB} MB"
-                )
+        # ============================================================
+        # ЭТАП 2: Проверка файла проектной документации
+        # ============================================================
+        
+        # Проверка размера файла
+        file_size = await _get_file_size(doc_document)
+        if file_size > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл {doc_document.filename} слишком большой ({file_size / 1024 / 1024:.2f} MB). Максимум: {MAX_FILE_SIZE_MB} MB"
+            )
 
         # Read contents
-        await tz_document.seek(0)
         await doc_document.seek(0)
-        if tu_document:
-            await tu_document.seek(0)
-
-        tz_content = await tz_document.read()
         doc_content = await doc_document.read()
-        tu_content = None
-        if tu_document:
-            tu_content = await tu_document.read()
 
-        logger.info(f"📊 File sizes - TZ: {len(tz_content) / 1024:.1f} KB, DOC: {len(doc_content) / 1024:.1f} KB")
-
-        # Extract TZ text (ручной парсинг)
-        logger.info("📄 [STEP 1/4] Extracting text from TZ...")
-        if await request.is_disconnected():
-            logger.warning("⚠️ Client disconnected during TZ extraction")
-            return AnalysisResponse(
-                stage=stage,
-                req_type="ТЗ+ТУ" if check_tu else "ТЗ",
-                requirements=[],
-                summary="Анализ прерван: клиент отключился во время извлечения текста из ТЗ"
-            )
-
-        tz_text = await extract_text_from_any(tz_content, tz_document.filename)
-
-        # Handle TU if needed
-        has_tu = check_tu and (tu_content is not None or stage in TU_PROMPTS)
-        if has_tu:
-            logger.info("📄 Adding TU to requirements...")
-            tu_text = await extract_text_from_any(tu_content, tu_document.filename) if tu_content else TU_PROMPTS.get(stage, "")
-            tz_text += "\n\n=== Технические условия (ТУ) ===\n" + tu_text
-
-        # Segment requirements (контролируемая сегментация)
-        logger.info("✂️ [STEP 2/4] Segmenting requirements from TZ/TU...")
-        if await request.is_disconnected():
-            logger.warning("⚠️ Client disconnected during segmentation")
-            return AnalysisResponse(
-                stage=stage,
-                req_type="ТЗ+ТУ" if has_tu else "ТЗ",
-                requirements=[],
-                summary="Анализ прерван: клиент отключился во время сегментации требований"
-            )
-
-        requirements = await segment_requirements(tz_text)
-
-        if not requirements:
-            raise HTTPException(status_code=400, detail="No requirements extracted from TZ")
-
-        logger.info(f"✅ Extracted {len(requirements)} requirements")
+        logger.info(f"📊 File size - DOC: {len(doc_content) / 1024:.1f} KB")
 
         # ============================================================
-        # ЭТАП 2 [STAGE 1]: Извлечение метаданных страниц
+        # ЭТАП 3 [STAGE 1]: Извлечение метаданных страниц
         # ============================================================
 
-        logger.info("📋 [STEP 3/7] STAGE 1: Extracting page metadata...")
+        logger.info("📋 [STEP 1/4] STAGE 1: Extracting page metadata...")
         pages_metadata = await extract_page_metadata(doc_content, doc_document.filename, max_pages=150)
 
         # ============================================================
-        # ЭТАП 3 [STAGE 2]: Конвертация в низкое качество и оценка релевантности
+        # ЭТАП 4 [STAGE 2]: Конвертация в низкое качество и оценка релевантности
         # ============================================================
 
-        logger.info("📤 [STEP 4/7] STAGE 2: Converting to low-res and assessing relevance...")
+        logger.info("📤 [STEP 2/4] STAGE 2: Converting to low-res and assessing relevance...")
         # Текстовый префильтр страниц
         page_texts_quick = _extract_page_texts_quick(doc_content, max_pages=STAGE2_MAX_PAGES)
         candidate_pages = _simple_candidate_pages(requirements, page_texts_quick, per_req=7, cap_total=30)
@@ -1482,16 +1493,16 @@ async def analyze_documentation(
         page_mapping = await assess_page_relevance(pages_metadata, doc_images_low, requirements, page_numbers=page_numbers_kept)
 
         # ============================================================
-        # ЭТАП 4: Подготовка system prompt
+        # ЭТАП 5: Подготовка system prompt
         # ============================================================
 
-        system_prompt = get_analysis_system_prompt(stage, "ТЗ+ТУ" if has_tu else "ТЗ")
+        system_prompt = get_analysis_system_prompt(stage, "ТЗ")
 
         # ============================================================
-        # ЭТАП 5 [STAGE 3]: Группировка и анализ с высоким разрешением
+        # ЭТАП 6 [STAGE 3]: Группировка и анализ с высоким разрешением
         # ============================================================
 
-        logger.info(f"🔍 [STEP 5/7] STAGE 3: Analyzing with high-resolution images...")
+        logger.info(f"🔍 [STEP 3/4] STAGE 3: Analyzing with high-resolution images...")
         analyzed_reqs = []
 
         # Группируем требования по общим страницам для оптимизации
@@ -1514,7 +1525,7 @@ async def analyze_documentation(
                 # Возвращаем частичные результаты
                 return AnalysisResponse(
                     stage=stage,
-                    req_type="ТЗ+ТУ" if has_tu else "ТЗ",
+                    req_type="ТЗ",
                     requirements=analyzed_reqs,
                     summary=f"Анализ прерван: клиент отключился после обработки {len(analyzed_reqs)}/{len(requirements)} требований (группа {group_idx}/{len(page_to_reqs)})"
                 )
@@ -1537,7 +1548,7 @@ async def analyze_documentation(
                     # Клиент отключился во время batch анализа
                     return AnalysisResponse(
                         stage=stage,
-                        req_type="ТЗ+ТУ" if has_tu else "ТЗ",
+                        req_type="ТЗ",
                         requirements=analyzed_reqs,
                         summary=f"Анализ прерван: клиент отключился во время batch анализа. Обработано {len(analyzed_reqs)}/{len(requirements)} требований"
                     )
@@ -1548,16 +1559,16 @@ async def analyze_documentation(
         analyzed_reqs.sort(key=lambda r: r.number)
 
         # ============================================================
-        # ЭТАП 5: Генерация сводки
+        # ЭТАП 7: Генерация сводки
         # ============================================================
 
-        logger.info("📝 Generating summary...")
+        logger.info("📝 [STEP 4/4] Generating summary...")
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected before summary")
             # Возвращаем результаты без summary
             return AnalysisResponse(
                 stage=stage,
-                req_type="ТЗ+ТУ" if has_tu else "ТЗ",
+                req_type="ТЗ",
                 requirements=analyzed_reqs,
                 summary=f"Анализ завершен, но клиент отключился перед генерацией сводки. Проанализировано {len(analyzed_reqs)} требований."
             )
@@ -1580,11 +1591,11 @@ async def analyze_documentation(
 Средняя достоверность: {sum(r.confidence for r in analyzed_reqs)/total:.1f}%"""
 
         # ============================================================
-        # ЭТАП 6 (опционально): Поиск противоречий
+        # ЭТАП 8 (опционально): Поиск противоречий
         # ============================================================
 
         if STAGE4_ENABLED:
-            logger.info("🔍 [STEP 6/7] STAGE 4: Поиск противоречий в документации...")
+            logger.info("🔍 STAGE 4: Поиск противоречий в документации...")
             try:
                 contradictions_report = await find_contradictions(
                     pages_metadata=pages_metadata,
@@ -1610,18 +1621,18 @@ async def analyze_documentation(
 
         parsed_result = AnalysisResponse(
             stage=stage,
-            req_type="ТЗ+ТУ" if has_tu else "ТЗ",
+            req_type="ТЗ",
             requirements=analyzed_reqs,
             summary=summary
         )
 
-        logger.info(f"✅ [HYBRID] Анализ завершен успешно. Проанализировано {len(analyzed_reqs)} требований.")
+        logger.info(f"✅ [STEP 2] Анализ завершен успешно. Проанализировано {len(analyzed_reqs)} требований.")
         return parsed_result
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ [HYBRID] Ошибка при анализе: {e}", exc_info=True)
+        logger.error(f"❌ [STEP 2] Ошибка при анализе: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка анализа: {str(e)}")
 
 

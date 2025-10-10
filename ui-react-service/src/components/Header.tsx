@@ -2,33 +2,43 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { Requirement } from '../types';
+import { EditableRequirement } from './RequirementEditor';
 import './Header.css';
 
 interface HeaderProps {
+  onRequirementsExtracted: (requirements: EditableRequirement[]) => void;
   onAnalysisComplete: (
     requirements: Requirement[],
     summary: string
   ) => void;
   onDocFileChange: (file: File | null) => void;
+  confirmedRequirements: EditableRequirement[] | null;
 }
 
 const API_URL = '/api';
 
-const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) => {
+const Header: React.FC<HeaderProps> = ({ 
+  onRequirementsExtracted,
+  onAnalysisComplete, 
+  onDocFileChange,
+  confirmedRequirements 
+}) => {
   const [stage, setStage] = useState('ФЭ');
-  const [checkTu, setCheckTu] = useState(false);
   const [tzFile, setTzFile] = useState<File | null>(null);
   const [docFile, setDocFile] = useState<File | null>(null);
-  const [tuFile, setTuFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [currentStage, setCurrentStage] = useState('');
+  
+  // Определяем текущий шаг: 1 - извлечение требований, 2 - анализ
+  const currentStep = confirmedRequirements ? 2 : 1;
 
-  const handleAnalyze = async () => {
-    if (!tzFile || !docFile) {
-      setError('Необходимо загрузить ТЗ и файл документации.');
-      return; 
+  // Шаг 1: Извлечение требований из ТЗ
+  const handleExtractRequirements = async () => {
+    if (!tzFile) {
+      setError('Необходимо загрузить ТЗ.');
+      return;
     }
 
     setLoading(true);
@@ -36,26 +46,95 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
     setAnalysisProgress(0);
     setCurrentStage('');
 
-  // Симуляция прогресса через этапы (с учетом бэкенд-логов): удерживаем <=95% до ответа API
-  const stages = [
-      { name: 'Извлечение текста из ТЗ', duration: 15000, progress: 12 },
-      { name: 'Сегментация требований', duration: 10000, progress: 22 },
-      { name: 'Stage 1: Извлечение метаданных', duration: 20000, progress: 38 },
-      { name: 'Stage 2: Оценка релевантности', duration: 30000, progress: 55 },
-      { name: 'Stage 3: Детальный анализ', duration: 240000, progress: 92 },
-      { name: 'Stage 4: Поиск противоречий', duration: 30000, progress: 95 },
+    const stages = [
+      { name: 'Извлечение текста из ТЗ', duration: 15000, progress: 50 },
+      { name: 'Сегментация требований', duration: 10000, progress: 95 },
     ];
 
     let currentStageIndex = 0;
     let elapsed = 0;
-    const totalStageDuration = stages.reduce((acc, s) => acc + s.duration, 0);
-    const tick = 500; // обновление каждые 0.5с для плавности
+    const tick = 500;
     const progressInterval = setInterval(() => {
       if (currentStageIndex < stages.length) {
         const stage = stages[currentStageIndex];
         elapsed += tick;
         setCurrentStage(stage.name);
-        // Плавное приближение к целевому прогрессу этапа
+        setAnalysisProgress((prev) => {
+          const target = stage.progress;
+          const step = Math.max(0.5, (target - prev) * 0.05);
+          const next = Math.min(prev + step, target);
+          return Math.min(next, 95);
+        });
+        if (elapsed >= stage.duration) {
+          currentStageIndex++;
+          elapsed = 0;
+        }
+      }
+    }, tick);
+
+    const formData = new FormData();
+    formData.append('tz_document', tzFile);
+
+    try {
+      const response = await axios.post(`${API_URL}/extract_requirements`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 300000, // 5 minutes
+      });
+
+      clearInterval(progressInterval);
+      setAnalysisProgress(100);
+      setCurrentStage('Завершено');
+
+      const { requirements } = response.data;
+      onRequirementsExtracted(requirements);
+    } catch (err: any) {
+      clearInterval(progressInterval);
+      let errorMessage = 'Произошла ошибка при извлечении требований.';
+      if (axios.isAxiosError(err) && err.response) {
+        errorMessage = `Ошибка API: ${err.response.status} - ${err.response.data.detail || err.message}`;
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      setError(errorMessage);
+      console.error(err);
+    } finally {
+      setLoading(false);
+      setTimeout(() => {
+        setAnalysisProgress(0);
+        setCurrentStage('');
+      }, 2000);
+    }
+  };
+
+  // Шаг 2: Анализ проектной документации
+  const handleAnalyzeProject = async () => {
+    if (!docFile || !confirmedRequirements) {
+      setError('Необходимо загрузить проектную документацию и подтвердить требования.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setAnalysisProgress(0);
+    setCurrentStage('');
+
+    const stages = [
+      { name: 'Stage 1: Извлечение метаданных', duration: 20000, progress: 25 },
+      { name: 'Stage 2: Оценка релевантности', duration: 30000, progress: 45 },
+      { name: 'Stage 3: Детальный анализ', duration: 240000, progress: 92 },
+      { name: 'Stage 4: Генерация отчета', duration: 10000, progress: 95 },
+    ];
+
+    let currentStageIndex = 0;
+    let elapsed = 0;
+    const tick = 500;
+    const progressInterval = setInterval(() => {
+      if (currentStageIndex < stages.length) {
+        const stage = stages[currentStageIndex];
+        elapsed += tick;
+        setCurrentStage(stage.name);
         setAnalysisProgress((prev) => {
           const target = stage.progress;
           const step = Math.max(0.5, (target - prev) * 0.05);
@@ -71,12 +150,8 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
 
     const formData = new FormData();
     formData.append('stage', stage);
-    formData.append('check_tu', String(checkTu));
-    formData.append('tz_document', tzFile);
+    formData.append('requirements_json', JSON.stringify(confirmedRequirements));
     formData.append('doc_document', docFile);
-    if (checkTu && tuFile) {
-      formData.append('tu_document', tuFile);
-    }
 
     try {
       const response = await axios.post(`${API_URL}/analyze`, formData, {
@@ -127,110 +202,123 @@ const Header: React.FC<HeaderProps> = ({ onAnalysisComplete, onDocFileChange }) 
       <div className="header-content">
         <div className="header-title">
           <h1>Анализ проектной документации</h1>
-          <p className="header-subtitle">Автоматическая проверка соответствия требованиям ТЗ</p>
+          <p className="header-subtitle">
+            {currentStep === 1 
+              ? 'Шаг 1: Извлечение требований из ТЗ' 
+              : `Шаг 2: Анализ проектной документации (${confirmedRequirements?.filter(r => r.selected).length} требований)`}
+          </p>
+        </div>
+        
+        {/* Индикатор шагов */}
+        <div className="steps-indicator">
+          <div className={`step ${currentStep >= 1 ? 'active' : ''} ${currentStep > 1 ? 'completed' : ''}`}>
+            <div className="step-number">{currentStep > 1 ? '✓' : '1'}</div>
+            <div className="step-label">Извлечение требований</div>
+          </div>
+          <div className="step-divider"></div>
+          <div className={`step ${currentStep >= 2 ? 'active' : ''}`}>
+            <div className="step-number">2</div>
+            <div className="step-label">Анализ проекта</div>
+          </div>
         </div>
         
         <div className="controls-grid">
-          <div className="control-group">
-            <label className="control-label">Стадия проекта</label>
-            <select 
-              className="control-input select-input" 
-              value={stage} 
-              onChange={(e) => setStage(e.target.value)}
-            >
-              <option value="ГК">Градостроительная концепция</option>
-              <option value="ФЭ">Форэскизный проект</option>
-              <option value="ЭП">Эскизный проект</option>
-            </select>
-          </div>
-
-          <div className="control-group checkbox-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                className="checkbox-input"
-                checked={checkTu}
-                onChange={(e) => setCheckTu(e.target.checked)}
-              />
-              <span className="checkbox-text">Добавить проверку ТУ</span>
-            </label>
-          </div>
-
-          <div className="control-group">
-            <label className="control-label">
-              Техническое задание (ТЗ)
-              {tzFile && <span className="file-name">✓ {tzFile.name}</span>}
-            </label>
-            <div className="file-input-wrapper">
-              <input 
-                type="file" 
-                id="tz-file"
-                className="file-input" 
-                accept=".pdf"
-                onChange={handleFileChange(setTzFile)} 
-              />
-              <label htmlFor="tz-file" className="file-input-label">
-                {tzFile ? 'Изменить файл' : 'Выбрать файл'}
-              </label>
-            </div>
-          </div>
-
-          <div className="control-group">
-            <label className="control-label">
-              Проектная документация
-              {docFile && <span className="file-name">✓ {docFile.name}</span>}
-            </label>
-            <div className="file-input-wrapper">
-              <input 
-                type="file" 
-                id="doc-file"
-                className="file-input" 
-                accept=".pdf"
-                onChange={handleFileChange(setDocFile, true)} 
-              />
-              <label htmlFor="doc-file" className="file-input-label">
-                {docFile ? 'Изменить файл' : 'Выбрать файл'}
-              </label>
-            </div>
-          </div>
-
-          {checkTu && (
-            <div className="control-group">
-              <label className="control-label">
-                Технические условия (ТУ)
-                {tuFile && <span className="file-name">✓ {tuFile.name}</span>}
-              </label>
-              <div className="file-input-wrapper">
-                <input 
-                  type="file" 
-                  id="tu-file"
-                  className="file-input" 
-                  accept=".pdf"
-                  onChange={handleFileChange(setTuFile)} 
-                />
-                <label htmlFor="tu-file" className="file-input-label">
-                  {tuFile ? 'Изменить файл' : 'Выбрать файл'}
+          {/* Шаг 1: Загрузка ТЗ */}
+          {currentStep === 1 && (
+            <>
+              <div className="control-group">
+                <label className="control-label">
+                  Техническое задание (ТЗ)
+                  {tzFile && <span className="file-name">✓ {tzFile.name}</span>}
                 </label>
+                <div className="file-input-wrapper">
+                  <input 
+                    type="file" 
+                    id="tz-file"
+                    className="file-input" 
+                    accept=".pdf,.docx"
+                    onChange={handleFileChange(setTzFile)} 
+                  />
+                  <label htmlFor="tz-file" className="file-input-label">
+                    {tzFile ? 'Изменить файл' : 'Выбрать файл (PDF или DOCX)'}
+                  </label>
+                </div>
               </div>
-            </div>
+
+              <div className="control-group button-group">
+                <button 
+                  className={`analyze-button ${loading ? 'loading' : ''}`}
+                  onClick={handleExtractRequirements} 
+                  disabled={loading || !tzFile}
+                >
+                  {loading ? (
+                    <>
+                      <span className="spinner"></span>
+                      Извлечение требований...
+                    </>
+                  ) : (
+                    '📋 Извлечь требования из ТЗ'
+                  )}
+                </button>
+              </div>
+            </>
           )}
 
-          <div className="control-group button-group">
-            <button 
-              className={`analyze-button ${loading ? 'loading' : ''}`}
-              onClick={handleAnalyze} 
-              disabled={loading || !tzFile || !docFile}
-            >
-              {loading ? (
-                <>
-                  <span className="spinner"></span>
-                  Анализ в процессе...
-                </>
-              ) : (
-                'Выполнить анализ'
-              )}
-            </button>
-          </div>
+          {/* Шаг 2: Загрузка проектной документации */}
+          {currentStep === 2 && (
+            <>
+              <div className="control-group">
+                <label className="control-label">Стадия проекта</label>
+                <select 
+                  className="control-input select-input" 
+                  value={stage} 
+                  onChange={(e) => setStage(e.target.value)}
+                  disabled={loading}
+                >
+                  <option value="ГК">Градостроительная концепция</option>
+                  <option value="ФЭ">Форэскизный проект</option>
+                  <option value="ЭП">Эскизный проект</option>
+                </select>
+              </div>
+
+              <div className="control-group">
+                <label className="control-label">
+                  Проектная документация
+                  {docFile && <span className="file-name">✓ {docFile.name}</span>}
+                </label>
+                <div className="file-input-wrapper">
+                  <input 
+                    type="file" 
+                    id="doc-file"
+                    className="file-input" 
+                    accept=".pdf"
+                    onChange={handleFileChange(setDocFile, true)}
+                    disabled={loading}
+                  />
+                  <label htmlFor="doc-file" className="file-input-label">
+                    {docFile ? 'Изменить файл' : 'Выбрать файл проекта (PDF)'}
+                  </label>
+                </div>
+              </div>
+
+              <div className="control-group button-group">
+                <button 
+                  className={`analyze-button ${loading ? 'loading' : ''}`}
+                  onClick={handleAnalyzeProject} 
+                  disabled={loading || !docFile}
+                >
+                  {loading ? (
+                    <>
+                      <span className="spinner"></span>
+                      Анализ в процессе...
+                    </>
+                  ) : (
+                    '🔍 Выполнить анализ проекта'
+                  )}
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         {error && (
