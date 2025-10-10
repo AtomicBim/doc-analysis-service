@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Requirement } from '../types';
 import { EditableRequirement } from './RequirementEditor';
@@ -35,9 +35,51 @@ const Header: React.FC<HeaderProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [currentStage, setCurrentStage] = useState('');
-  
+  const [realTimeStatus, setRealTimeStatus] = useState<any>(null);
+  const statusPollingRef = useRef<NodeJS.Timeout | null>(null);
+
   // Определяем текущий шаг: 1 - извлечение требований, 2 - анализ
   const currentStep = confirmedRequirements ? 2 : 1;
+
+  // Polling статуса анализа
+  useEffect(() => {
+    if (loading && currentStep === 2) {
+      // Начинаем polling статуса каждые 2 секунды
+      statusPollingRef.current = setInterval(fetchAnalysisStatus, 2000);
+    } else {
+      // Останавливаем polling
+      if (statusPollingRef.current) {
+        clearInterval(statusPollingRef.current);
+        statusPollingRef.current = null;
+      }
+      // Сбрасываем статус если анализ не запущен
+      if (!loading) {
+        setRealTimeStatus(null);
+      }
+    }
+
+    return () => {
+      if (statusPollingRef.current) {
+        clearInterval(statusPollingRef.current);
+      }
+    };
+  }, [loading, currentStep]);
+
+  // Получение статуса анализа в реальном времени
+  const fetchAnalysisStatus = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/status`);
+      const status = response.data;
+      if (status.is_running) {
+        setRealTimeStatus(status);
+        setCurrentStage(status.stage_name);
+        setAnalysisProgress(status.progress);
+        console.log(`📊 Real-time status: Stage ${status.current_stage}/${status.total_stages} - ${status.stage_name} - ${status.progress}%`);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch analysis status:', err);
+    }
+  };
 
   // Шаг 1: Извлечение требований из ТЗ
   const handleExtractRequirements = async () => {
@@ -314,13 +356,13 @@ const Header: React.FC<HeaderProps> = ({
             </div>
             
             <div className="progress-bar">
-              <div 
-                className="progress-fill" 
-                style={{ 
+              <div
+                className="progress-fill"
+                style={{
                   width: `${analysisProgress}%`,
-                  background: analysisProgress < 30 
+                  background: analysisProgress < 30
                     ? 'linear-gradient(90deg, #3b82f6, #60a5fa)'
-                    : analysisProgress < 70 
+                    : analysisProgress < 70
                     ? 'linear-gradient(90deg, #8b5cf6, #a78bfa)'
                     : 'linear-gradient(90deg, #10b981, #34d399)'
                 }}
@@ -328,6 +370,19 @@ const Header: React.FC<HeaderProps> = ({
                 <div className="progress-shimmer"></div>
               </div>
             </div>
+
+            {/* Показываем реальный статус если доступен */}
+            {realTimeStatus && (
+              <div className="progress-stage">
+                <span className="stage-icon">
+                  {realTimeStatus.current_stage === 1 ? '📋' :
+                   realTimeStatus.current_stage === 2 ? '🔍' : '📊'}
+                </span>
+                <span className="stage-text">
+                  Этап {realTimeStatus.current_stage}/{realTimeStatus.total_stages}: {realTimeStatus.stage_name}
+                </span>
+              </div>
+            )}
             
             {currentStage && (
               <div className="progress-stage">

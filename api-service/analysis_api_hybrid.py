@@ -1217,6 +1217,39 @@ class AnalysisResponse(BaseModel):
 
 
 # ============================
+# ГЛОБАЛЬНОЕ СОСТОЯНИЕ АНАЛИЗА
+# ============================
+
+analysis_status = {
+    "current_stage": None,
+    "progress": 0,
+    "stage_name": "",
+    "total_stages": 3,
+    "start_time": None,
+    "is_running": False
+}
+
+def update_analysis_status(stage_num: int, stage_name: str, progress: int):
+    """Обновляет глобальный статус анализа"""
+    analysis_status.update({
+        "current_stage": stage_num,
+        "progress": progress,
+        "stage_name": stage_name,
+        "is_running": True
+    })
+    logger.info(f"📊 Status updated: Stage {stage_num}/3 - {stage_name} - {progress}%")
+
+def reset_analysis_status():
+    """Сбрасывает статус анализа"""
+    analysis_status.update({
+        "current_stage": None,
+        "progress": 0,
+        "stage_name": "",
+        "is_running": False,
+        "start_time": None
+    })
+
+# ============================
 # FASTAPI ПРИЛОЖЕНИЕ
 # ============================
 
@@ -1250,6 +1283,12 @@ async def root():
         "model": OPENAI_MODEL,
         "max_file_size_mb": MAX_FILE_SIZE_MB
     }
+
+
+@app.get("/status")
+async def get_analysis_status():
+    """Получить текущий статус анализа"""
+    return analysis_status
 
 
 @app.post("/extract_requirements")
@@ -1355,13 +1394,17 @@ async def analyze_documentation(
 
         logger.info(f"📋 [STEP 2] Анализ проектной документации. Стадия: {stage}")
 
+        # Сбрасываем статус и начинаем анализ
+        reset_analysis_status()
+
         # ============================================================
         # ЭТАП 1: Парсинг требований из JSON
         # ============================================================
-        
+
         try:
             requirements = json.loads(requirements_json)
             logger.info(f"📋 Получено {len(requirements)} требований из шага 1")
+            update_analysis_status(1, "Подготовка данных", 5)
             
             # Фильтруем только выбранные требования (selected=true)
             selected_requirements = [req for req in requirements if req.get('selected', True)]
@@ -1400,6 +1443,7 @@ async def analyze_documentation(
 
         logger.info("📋 [STEP 1/3] STAGE 1: Extracting page metadata...")
         pages_metadata = await extract_page_metadata(doc_content, doc_document.filename, max_pages=150)
+        update_analysis_status(1, "Извлечение метаданных", 33)
 
         # Создаем mapping: sheet_number → pdf_page_number для навигации
         sheet_to_pdf_mapping = {}
@@ -1417,10 +1461,14 @@ async def analyze_documentation(
         # ============================================================
 
         logger.info("📤 [STEP 2/3] STAGE 2: Converting to low-res and assessing relevance...")
+        update_analysis_status(2, "Оценка релевантности страниц", 40)
+
         # Текстовый префильтр страниц
         page_texts_quick = _extract_page_texts_quick(doc_content, max_pages=STAGE2_MAX_PAGES)
         candidate_pages = _simple_candidate_pages(requirements, page_texts_quick, per_req=7, cap_total=30)
         logger.info(f"📄 [STAGE 2] Текстовый префильтр выбрал страницы: {candidate_pages[:10]}{'...' if len(candidate_pages) > 10 else ''}")
+
+        update_analysis_status(2, "Оценка релевантности страниц", 50)
 
         # Извлекаем только выбранные страницы в low-res
         doc_images_low, page_numbers_kept = await extract_selected_pdf_pages_as_images(
@@ -1428,7 +1476,10 @@ async def analyze_documentation(
             detail=STAGE2_DETAIL, dpi=STAGE2_DPI, quality=STAGE2_QUALITY
         )
 
+        update_analysis_status(2, "Оценка релевантности страниц", 60)
+
         page_mapping = await assess_page_relevance(pages_metadata, doc_images_low, requirements, page_numbers=page_numbers_kept)
+        update_analysis_status(2, "Оценка релевантности страниц", 66)
 
         # ============================================================
         # ЭТАП 5: Подготовка system prompt
@@ -1441,6 +1492,7 @@ async def analyze_documentation(
         # ============================================================
 
         logger.info(f"🔍 [STEP 3/3] STAGE 3: Analyzing with high-resolution images...")
+        update_analysis_status(3, "Детальный анализ требований", 70)
         analyzed_reqs = []
 
         # Группируем требования по общим страницам для оптимизации
@@ -1502,6 +1554,8 @@ async def analyze_documentation(
         # ============================================================
 
         logger.info("📝 [STEP 3/3] Generating summary...")
+        update_analysis_status(3, "Генерация отчета", 95)
+
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected before summary")
             # Возвращаем результаты без summary
@@ -1567,6 +1621,7 @@ async def analyze_documentation(
             sheet_to_pdf_mapping=sheet_to_pdf_mapping  # Новое поле для навигации
         )
 
+        update_analysis_status(3, "Анализ завершен", 100)
         logger.info(f"✅ [STEP 2] Анализ завершен успешно. Проанализировано {len(analyzed_reqs)} требований.")
         return parsed_result
 
@@ -1574,6 +1629,7 @@ async def analyze_documentation(
         raise
     except Exception as e:
         logger.error(f"❌ [STEP 2] Ошибка при анализе: {e}", exc_info=True)
+        reset_analysis_status()  # Сбрасываем статус при ошибке
         raise HTTPException(status_code=500, detail=f"Ошибка анализа: {str(e)}")
 
 
