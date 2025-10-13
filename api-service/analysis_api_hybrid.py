@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 
 # Импорт нашего рефакторингового PDF процессора
 from pdf_processor import PDFProcessor, PDFBatchProcessor
+from progress_tracker import ProgressTracker
 from config import (
     # Stage 1
     STAGE1_MAX_PAGES, STAGE1_DPI, STAGE1_QUALITY, STAGE1_MAX_PAGES_PER_REQUEST,
@@ -144,6 +145,37 @@ STAGE_PROMPTS = load_stage_prompts()
 # ============================
 # PDF PROCESSING ФУНКЦИИ
 # ============================
+
+def normalize_sheet_number_to_digit(sheet_num: str) -> str:
+    """
+    Нормализует номер листа к ТОЛЬКО ЦИФРОВОМУ формату.
+    Примеры:
+        "АР-01" → "1"
+        "КР-03.1" → "3"
+        "Лист 26" → "26"
+        "5" → "5"
+    """
+    import re
+
+    if not sheet_num or sheet_num == "N/A":
+        return "N/A"
+
+    # Извлекаем все числа из строки
+    numbers = re.findall(r'\d+', str(sheet_num))
+
+    if not numbers:
+        logger.warning(f"⚠️ Не удалось извлечь цифры из номера листа: '{sheet_num}'")
+        return "N/A"
+
+    # Берем ПОСЛЕДНЕЕ число (обычно это номер листа в форматах типа "АР-01")
+    digit_only = numbers[-1]
+
+    # Убираем ведущие нули: "01" → "1"
+    digit_only = str(int(digit_only))
+
+    logger.debug(f"📋 Нормализация номера листа: '{sheet_num}' → '{digit_only}'")
+    return digit_only
+
 
 def _combine_crops_for_metadata(crops: List[str]) -> str:
     """
@@ -951,6 +983,18 @@ async def analyze_batch_with_high_detail(
                     req = req_map[req_num]
                     # Нормализуем несогласованности между status и confidence
                     normalized_analysis = normalize_status_confidence(analysis)
+
+                    # 🔧 КРИТИЧЕСКИ ВАЖНО: Валидация и нормализация reference к ТОЛЬКО ЦИФРОВОМУ формату
+                    reference = normalized_analysis.get('reference', '-')
+                    if reference and reference != "-":
+                        # Нормализуем reference к цифровому формату если содержит букву
+                        import re
+                        if re.search(r'[а-яА-ЯёЁa-zA-Z]', reference):
+                            logger.warning(f"⚠️ [STAGE 3] Req {req_num}: reference содержит буквы: '{reference}'")
+                            normalized_ref = normalize_sheet_number_to_digit(reference)
+                            normalized_analysis['reference'] = normalized_ref
+                            logger.info(f"📋 [STAGE 3] Req {req_num}: нормализовано reference '{reference}' → '{normalized_ref}'")
+
                     results.append(RequirementAnalysis(
                         **normalized_analysis,
                         section=req.get('section')
@@ -1445,6 +1489,18 @@ async def analyze_documentation(
 
         logger.info("📋 [STEP 1/3] STAGE 1: Extracting page metadata...")
         pages_metadata = await extract_page_metadata(doc_content, doc_document.filename, max_pages=150)
+
+        # 🔧 КРИТИЧЕСКИ ВАЖНО: Нормализуем номера листов к ТОЛЬКО ЦИФРОВОМУ формату
+        logger.info("📋 [STAGE 1] Нормализация номеров листов к цифровому формату...")
+        for page_meta in pages_metadata:
+            original_sheet_num = page_meta.get('sheet_number')
+            if original_sheet_num and original_sheet_num != "N/A":
+                normalized_sheet_num = normalize_sheet_number_to_digit(original_sheet_num)
+                page_meta['sheet_number'] = normalized_sheet_num
+                if normalized_sheet_num != original_sheet_num:
+                    logger.info(f"📋 Нормализовано: стр.{page_meta.get('page')} '{original_sheet_num}' → '{normalized_sheet_num}'")
+
+        logger.info(f"✅ [STAGE 1] Нормализация завершена. Все номера листов теперь в цифровом формате.")
         update_analysis_status(1, "Извлечение метаданных", 33)
 
         # Создаем mapping: sheet_number → pdf_page_number для навигации
@@ -1452,10 +1508,47 @@ async def analyze_documentation(
         for page_meta in pages_metadata:
             pdf_page = page_meta.get('page')
             sheet_num = page_meta.get('sheet_number', str(pdf_page))
-            if sheet_num and sheet_num != "N/A":
-                sheet_to_pdf_mapping[str(sheet_num)] = pdf_page
 
-        logger.info(f"📊 [STAGE 1] Создан mapping листов: {list(sheet_to_pdf_mapping.items())[:10]}...")
+            # Пропускаем невалидные номера
+            if not sheet_num or sheet_num == "N/A":
+                continue
+
+            # Нормализуем номер листа для надежного поиска
+            sheet_num_normalized = str(sheet_num).strip()
+
+            # Проверяем дубликаты и предупреждаем
+            if sheet_num_normalized in sheet_to_pdf_mapping:
+                logger.warning(f"⚠️ [STAGE 1] Дубликат номера листа '{sheet_num_normalized}': PDF страницы {sheet_to_pdf_mapping[sheet_num_normalized]} и {pdf_page}")
+                # Сохраняем первое вхождение (обычно оно корректное)
+                continue
+
+            sheet_to_pdf_mapping[sheet_num_normalized] = pdf_page
+
+            # Добавляем альтернативные варианты записи для надежности
+            # Например: "АР-01" → также доступен как "АР-1", "ар-01", "АР01"
+            alternatives = []
+
+            # Вариант без нулей: "АР-01" → "АР-1"
+            if '-' in sheet_num_normalized:
+                parts = sheet_num_normalized.split('-')
+                if len(parts) == 2 and parts[1].isdigit():
+                    alternatives.append(f"{parts[0]}-{int(parts[1])}")
+
+            # Вариант без дефиса: "АР-01" → "АР01"
+            alternatives.append(sheet_num_normalized.replace('-', ''))
+            alternatives.append(sheet_num_normalized.replace('–', ''))  # em-dash
+            alternatives.append(sheet_num_normalized.replace('—', ''))  # en-dash
+
+            # Вариант в нижнем регистре
+            alternatives.append(sheet_num_normalized.lower())
+
+            # Добавляем все альтернативы
+            for alt in alternatives:
+                if alt and alt != sheet_num_normalized and alt not in sheet_to_pdf_mapping:
+                    sheet_to_pdf_mapping[alt] = pdf_page
+
+        logger.info(f"📊 [STAGE 1] Создан mapping листов: {len(sheet_to_pdf_mapping)} вариантов для {len(pages_metadata)} страниц")
+        logger.info(f"📊 [STAGE 1] Примеры: {list(sheet_to_pdf_mapping.items())[:10]}...")
 
 
         # ============================================================

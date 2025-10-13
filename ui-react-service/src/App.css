@@ -110,6 +110,26 @@
   max-width: 400px;
 }
 
+.empty-state .empty-action {
+  font-size: 1rem;
+  color: #3b82f6;
+  font-weight: 600;
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 8px;
+  border: 1px dashed #3b82f6;
+}
+
+.pdf-missing-state .empty-icon {
+  opacity: 0.5;
+}
+
+.pdf-missing-state .empty-hint {
+  max-width: 500px;
+  line-height: 1.6;
+}
+
 @media (max-width: 1024px) {
   .App-main {
     flex-direction: column;

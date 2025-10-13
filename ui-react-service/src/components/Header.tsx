@@ -317,7 +317,10 @@ const Header: React.FC<HeaderProps> = ({
                 label="Проектная документация"
                 accept=".pdf"
                 fileName={docFile?.name}
-                onChange={setDocFile}
+                onChange={(file) => {
+                  setDocFile(file);
+                  onDocFileChange(file); // Передаем файл в App для отображения
+                }}
                 disabled={loading}
               />
 

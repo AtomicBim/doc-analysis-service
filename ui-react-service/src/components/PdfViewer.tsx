@@ -50,11 +50,11 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
     return () => clearTimeout(t);
   }, [page, numPages, scale, file]);
 
-  // Оптимизированная подсветка текста на странице
+  // Оптимизированная подсветка текста на странице с улучшенным поиском
   const highlightTextOnPage = useCallback(() => {
     if (!viewerRef.current || !searchText || !page) return;
 
-    // Очищаем предыдущие подсветки
+    // ВСЕГДА очищаем ВСЕ предыдущие подсветки при новом поиске
     const allTextLayers = viewerRef.current.querySelectorAll('.textLayer');
     allTextLayers.forEach(textLayer => {
       textLayer.querySelectorAll('.highlighted-text').forEach(el => {
@@ -62,41 +62,73 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file, page, highlightText = '' })
       });
     });
 
+    // Если searchText пустой - только очистка, выходим
+    if (!searchText.trim()) {
+      return;
+    }
+
     // Даем время на отрисовку текстового слоя
     const timer = setTimeout(() => {
       const pageWrapper = viewerRef.current?.querySelector(`[data-page-number="${page}"]`);
-      if (!pageWrapper) return;
+      if (!pageWrapper) {
+        console.warn(`⚠️ Страница ${page} еще не отрендерена. Повторная попытка...`);
+        return;
+      }
 
       const textLayer = pageWrapper.querySelector('.textLayer');
       if (!textLayer) {
-        console.log('Текстовый слой не найден на странице', page, '. PDF может содержать только изображения.');
+        console.log(`ℹ️ Текстовый слой не найден на странице ${page}. PDF может содержать только изображения (скан).`);
         return;
       }
 
       // Ищем текст для подсветки (нечувствительно к регистру)
-      const searchLower = searchText.toLowerCase();
+      const searchLower = searchText.toLowerCase().trim();
       const textElements = textLayer.querySelectorAll('span[role="presentation"]');
 
-      let foundAny = false;
+      // Разбиваем поисковый текст на токены для более гибкого поиска
+      const searchTokens = searchLower.split(/\s+/).filter(t => t.length > 2); // Игнорируем короткие слова
+
+      let foundElements: HTMLElement[] = [];
+      let exactMatch = false;
+
+      // Сначала пытаемся найти точное совпадение
       textElements.forEach(span => {
         const text = span.textContent?.toLowerCase() || '';
 
-        // Проверяем, содержит ли элемент искомый текст
+        // Точное совпадение (приоритет)
         if (text.includes(searchLower)) {
-          span.classList.add('highlighted-text');
-          foundAny = true;
+          (span as HTMLElement).classList.add('highlighted-text');
+          foundElements.push(span as HTMLElement);
+          exactMatch = true;
         }
       });
 
-      if (foundAny) {
+      // Если точного совпадения нет - ищем по токенам (частичное совпадение)
+      if (!exactMatch && searchTokens.length > 0) {
+        console.log(`🔍 Точное совпадение не найдено, ищем по токенам: ${searchTokens.join(', ')}`);
+
+        textElements.forEach(span => {
+          const text = span.textContent?.toLowerCase() || '';
+
+          // Проверяем, содержит ли элемент хотя бы 60% токенов
+          const matchedTokens = searchTokens.filter(token => text.includes(token));
+          if (matchedTokens.length >= Math.ceil(searchTokens.length * 0.6)) {
+            (span as HTMLElement).classList.add('highlighted-text');
+            foundElements.push(span as HTMLElement);
+          }
+        });
+      }
+
+      if (foundElements.length > 0) {
         // Прокручиваем к первому найденному элементу
-        const firstHighlight = textLayer.querySelector('.highlighted-text');
-        if (firstHighlight) {
-          firstHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-        console.log('✅ Текст найден и подсвечен на странице', page, ':', searchText);
+        const firstHighlight = foundElements[0];
+        firstHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        console.log(`✅ Текст найден на странице ${page}: ${foundElements.length} совпадений (${exactMatch ? 'точное' : 'частичное'} совпадение)`);
+        console.log(`🔍 Поисковый текст: "${searchText}"`);
       } else {
-        console.warn('❌ Текст не найден на странице', page, ':', searchText);
+        console.warn(`❌ Текст не найден на странице ${page}: "${searchText}"`);
+        console.warn(`💡 Возможные причины: текст на скане, разбит на несколько элементов, или опечатка в анализе`);
       }
     }, 500); // Даем время на рендеринг текстового слоя
 

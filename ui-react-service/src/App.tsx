@@ -56,7 +56,7 @@ function App() {
         const hasResults = parsed.requirements && parsed.requirements.length > 0;
         setNotification(
           hasResults
-            ? `📦 Восстановлены результаты анализа (${parsed.requirements.length} требований)`
+            ? `📦 Восстановлены результаты анализа (${parsed.requirements.length} требований). Загрузите PDF проекта для просмотра чертежей.`
             : '📦 Восстановлено предыдущее состояние приложения'
         );
 
@@ -201,12 +201,25 @@ function App() {
   // Правая панель (PDF + сводка)
   const rightPanelContent = (
     <div className="panel-content">
-      <PdfViewer 
-        file={pdfFile} 
-        page={selectedPage} 
-        highlightText={highlightText}
-        key={pageChangeKey}
-      />
+      {requirements.length > 0 && !pdfFile ? (
+        <div className="empty-state pdf-missing-state">
+          <div className="empty-icon">📄</div>
+          <p className="empty-text">PDF файл проекта не загружен</p>
+          <p className="empty-hint">
+            Результаты анализа восстановлены из localStorage, но PDF файл необходимо загрузить повторно для просмотра чертежей.
+          </p>
+          <p className="empty-action">
+            ↑ Загрузите проектную документацию в верхней панели
+          </p>
+        </div>
+      ) : (
+        <PdfViewer
+          file={pdfFile}
+          page={selectedPage}
+          highlightText={highlightText}
+          key={pageChangeKey}
+        />
+      )}
       {summary && (
         <div className="summary-container">
           <h3>Общая сводка</h3>

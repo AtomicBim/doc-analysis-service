@@ -19,7 +19,8 @@
       "WebFetch(domain:platform.openai.com)",
       "Bash(git checkout:*)",
       "Bash(find:*)",
-      "Bash(git branch:*)"
+      "Bash(git branch:*)",
+      "Bash(curl -s \"https://platform.openai.com/docs/pricing\")"
     ],
     "deny": [],
     "ask": []

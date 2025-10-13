@@ -68,59 +68,92 @@ export function extractReferencesFromField(
 
 /**
  * Извлекает описание, специфичное для конкретного листа
+ * УЛУЧШЕНО: извлекает КОНКРЕТНЫЙ текст, который нужно искать на чертеже
  */
 function extractSheetSpecificDescription(sheetRef: string, solution: string): string {
-  // Ищем упоминания конкретного листа в тексте решения
+  // Нормализуем номер листа для поиска (убираем пробелы, приводим к нижнему регистру)
+  const sheetRefNormalized = sheetRef.trim().replace(/\s+/g, '\\s*');
+
+  // Паттерны для поиска текста после упоминания листа
   const patterns = [
-    // Прямые упоминания типа "на Листе 10", "Лист 10", "лист 10"
-    new RegExp(`(?:на\\s+)?(?:лист[е]?|страниц[ае])\\s+${sheetRef}\\s*([^.;]*(?:[.;][^;.]*?(?=(?:лист[е]?|страниц[ае]|$)))?)`, 'gi'),
-    // Упоминания в скобках типа "(Лист 10)"
-    new RegExp(`\\(Лист\\s+${sheetRef}[^)]*\\)`, 'gi'),
-    // Упоминания с ссылками типа "Лист 10 и Лист 11"
-    new RegExp(`Лист\\s+${sheetRef}(?:\\s+и\\s+Лист\\s+\\d+)?\\s*([^.;]*(?:[.;][^;.]*?(?=(?:лист[е]?|страниц[ае]|$)))?)`, 'gi')
+    // 1. "на Листе АР-03: <текст>" или "Лист АР-03 - <текст>"
+    new RegExp(`(?:на\\s+)?(?:лист[еа]?)\\s+${sheetRefNormalized}\\s*[:–—-]\\s*([^.;]{10,150})`, 'gi'),
+
+    // 2. "Лист АР-03, где показано <текст>"
+    new RegExp(`(?:лист[еа]?)\\s+${sheetRefNormalized}[,\\s]+(?:где|на котором|который показывает|содержащий|с указанием)\\s+([^.;]{10,150})`, 'gi'),
+
+    // 3. "<текст> (Лист АР-03)"
+    new RegExp(`([^.;(]{15,150})\\s*\\((?:лист[еа]?)\\s+${sheetRefNormalized}\\)`, 'gi'),
+
+    // 4. "Лист АР-03 <текст до точки>"
+    new RegExp(`(?:лист[еа]?)\\s+${sheetRefNormalized}[,\\s]+([^.;]{15,150})[.;]`, 'gi'),
+
+    // 5. Текст ДО упоминания листа (для случаев типа "План 1 этажа Лист 5")
+    new RegExp(`([А-ЯЁа-яё][А-ЯЁа-яё\\s\\d-]{10,100})\\s+(?:на\\s+)?(?:лист[еа]?)\\s+${sheetRefNormalized}`, 'gi')
   ];
 
   for (const pattern of patterns) {
-    const matches = solution.match(pattern);
-    if (matches && matches.length > 0) {
-      // Берем первое найденное совпадение и очищаем его
-      let description = matches[0].trim();
+    const matches = Array.from(solution.matchAll(pattern));
+    if (matches.length > 0) {
+      for (const match of matches) {
+        let description = match[1]?.trim();
+        if (!description) continue;
 
-      // Убираем префикс с номером листа, оставляем только описание
-      description = description.replace(new RegExp(`^(?:на\\s+)?(?:лист[е]?|страниц[ае])\\s+${sheetRef}\\s*[-–—]?\\s*`, 'i'), '');
-      description = description.replace(/^\(Лист\s+\d+[^)]*\)/, '');
-      description = description.replace(/^Лист\s+\d+(?:\s+и\s+Лист\s+\d+)?\s*/, '');
+        // Очищаем от лишних символов в начале и конце
+        description = description.replace(/^[-–—:,;\s()]+/, '').replace(/[-–—:,;\s()]+$/, '').trim();
 
-      // Очищаем от лишних символов
-      description = description.replace(/^[-–—:,;\s]+/, '').replace(/[;.,]+$/, '').trim();
+        // Пропускаем слишком короткие или слишком общие описания
+        if (description.length < 10) continue;
+        if (/^(см\.|см|см\s+лист|лист|страница|стр)/i.test(description)) continue;
 
-      if (description && description.length > 10) {
-        // Обрезаем если слишком длинное
-        if (description.length > 150) {
-          description = description.substring(0, 147) + '...';
+        // Извлекаем КЛЮЧЕВЫЕ СЛОВА для поиска (первые 3-5 значимых слов)
+        const words = description.split(/\s+/);
+        const significantWords = words.filter(w =>
+          w.length > 3 &&
+          !/^(и|в|на|с|по|для|или|также|а|но|от|до|из|при)$/i.test(w)
+        );
+
+        // Формируем компактное описание из ключевых слов
+        let searchText = significantWords.slice(0, 5).join(' ');
+
+        // Если searchText слишком длинный - обрезаем
+        if (searchText.length > 80) {
+          searchText = searchText.substring(0, 77) + '...';
         }
-        return description;
+
+        // Если нашли хорошее описание - возвращаем
+        if (searchText.length >= 10) {
+          console.log(`✅ Извлечен текст для листа ${sheetRef}: "${searchText}"`);
+          return searchText;
+        }
       }
     }
   }
 
-  // Если не нашли специфичный текст, ищем ближайший контекст вокруг упоминания листа
-  const contextPattern = new RegExp(`.{0,50}${sheetRef}.{0,100}`, 'gi');
+  // Fallback: если не нашли специфичный текст, ищем общий контекст
+  const contextPattern = new RegExp(`.{0,30}${sheetRefNormalized}.{0,80}`, 'gi');
   const contextMatch = solution.match(contextPattern);
   if (contextMatch && contextMatch.length > 0) {
     let context = contextMatch[0].trim();
-    // Убираем упоминание самого листа и берем текст после него
-    const sheetIndex = context.toLowerCase().indexOf(sheetRef.toLowerCase());
-    if (sheetIndex !== -1) {
-      context = context.substring(sheetIndex + sheetRef.length).trim();
-      context = context.replace(/^[-–—:,;\s]+/, '').replace(/[;.,]+$/, '').trim();
 
-      if (context && context.length > 10) {
-        return context.length > 150 ? context.substring(0, 147) + '...' : context;
-      }
+    // Убираем упоминание самого листа
+    context = context.replace(new RegExp(`(?:на\\s+)?(?:лист[еа]?)\\s+${sheetRefNormalized}`, 'gi'), '').trim();
+    context = context.replace(/^[-–—:,;\s()]+/, '').replace(/[-–—:,;\s()]+$/, '').trim();
+
+    // Извлекаем значимые слова
+    const words = context.split(/\s+/).filter(w =>
+      w.length > 3 &&
+      !/^(и|в|на|с|по|для|или|также|а|но|от|до|из|при)$/i.test(w)
+    );
+
+    if (words.length >= 2) {
+      const searchText = words.slice(0, 5).join(' ');
+      console.log(`⚠️ Fallback: извлечен контекст для листа ${sheetRef}: "${searchText}"`);
+      return searchText.length > 80 ? searchText.substring(0, 77) + '...' : searchText;
     }
   }
 
+  console.warn(`❌ Не удалось извлечь текст для поиска на листе ${sheetRef}`);
   return '';
 }
 
