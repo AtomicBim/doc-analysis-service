@@ -32,12 +32,13 @@ export function resolveSheetToPdfPage(
 
 /**
  * Извлекает ссылки на страницы из поля reference (точные ссылки от API)
- * Для каждого листа ищет конкретный текст из решения
+ * Использует evidence_text если доступен, иначе ищет текст из решения
  */
 export function extractReferencesFromField(
   referenceField: string,
   solution: string,
-  sheetToPdfMapping: Record<string, number>
+  sheetToPdfMapping: Record<string, number>,
+  evidenceText?: string  // Новый параметр - конкретный текст с листа от LLM
 ): PageReference[] {
   const references: PageReference[] = [];
 
@@ -52,13 +53,25 @@ export function extractReferencesFromField(
     const pdfPageNum = resolveSheetToPdfPage(sheetRef, sheetToPdfMapping);
 
     if (pdfPageNum && !references.some(r => r.page === pdfPageNum)) {
-      // Ищем конкретный текст для этого листа в решении
-      const sheetSpecificText = extractSheetSpecificDescription(sheetRef, solution);
+      // ПРИОРИТЕТ 1: Используем evidence_text от LLM (конкретный текст с листа)
+      let searchText = evidenceText?.trim() || '';
+      
+      // ПРИОРИТЕТ 2: Если evidence_text нет, ищем в решении (старая логика)
+      if (!searchText) {
+        searchText = extractSheetSpecificDescription(sheetRef, solution);
+      }
+
+      // ПРИОРИТЕТ 3: Fallback если ничего не нашли
+      if (!searchText) {
+        searchText = `Упоминание листа ${sheetRef} в проектной документации`;
+      }
+
+      console.log(`🔍 Поиск для листа ${sheetRef}: "${searchText}"${evidenceText ? ' (от LLM)' : ' (извлечено)'}`);
 
       references.push({
         page: pdfPageNum,
         sheetNumber: sheetRef,
-        description: sheetSpecificText || `Упоминание листа ${sheetRef} в проектной документации`
+        description: searchText
       });
     }
   });
@@ -228,15 +241,20 @@ export function extractReferencesFromSolution(
 export function extractPageReferences(
   solution: string,
   referenceField: string | undefined,
-  sheetToPdfMapping: Record<string, number>
+  sheetToPdfMapping: Record<string, number>,
+  evidenceText?: string  // Новый параметр - конкретный текст с листа от LLM
 ): PageReference[] {
   const references: PageReference[] = [];
 
   // СНАЧАЛА парсим поле reference - там точные ссылки от API
-  references.push(...extractReferencesFromField(referenceField || '', solution, sheetToPdfMapping));
+  // Передаём evidence_text для использования в поиске
+  references.push(...extractReferencesFromField(referenceField || '', solution, sheetToPdfMapping, evidenceText));
 
-  // ПОТОМ парсим текст решения для дополнительных ссылок
-  references.push(...extractReferencesFromSolution(solution, sheetToPdfMapping));
+  // ПОТОМ парсим текст решения для дополнительных ссылок (только если нет evidence_text)
+  // Если есть evidence_text, не добавляем дополнительные ссылки из текста решения
+  if (!evidenceText) {
+    references.push(...extractReferencesFromSolution(solution, sheetToPdfMapping));
+  }
 
   // Если ничего не найдено - попробуем простой поиск числовых ссылок
   if (references.length === 0 && referenceField && referenceField !== '-') {
@@ -249,7 +267,7 @@ export function extractPageReferences(
           references.push({
             page: pageNum,
             sheetNumber: numStr,
-            description: solution.substring(0, 100).trim() + '...'
+            description: evidenceText || solution.substring(0, 100).trim() + '...'
           });
         }
       });

@@ -1249,6 +1249,7 @@ class RequirementAnalysis(BaseModel):
     confidence: int
     solution_description: str
     reference: str
+    evidence_text: Optional[str] = None  # Конкретный текст с листа для поиска
     discrepancies: str
     section: Optional[str] = None
 

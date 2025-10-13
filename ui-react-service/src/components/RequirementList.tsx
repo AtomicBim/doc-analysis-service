@@ -56,7 +56,7 @@ const RequirementList: React.FC<RequirementListProps> = ({ requirements, onSelec
       ) : (
         <div className="requirements-list">
           {requirements.map((req) => {
-            const pageReferences = extractPageReferences(req.solution_description, req.reference, sheetToPdfMapping);
+            const pageReferences = extractPageReferences(req.solution_description, req.reference, sheetToPdfMapping, req.evidence_text);
             const statusClass = getStatusColor(req.status);
             const statusIcon = getStatusIcon(req.status);
             
