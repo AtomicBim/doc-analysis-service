@@ -304,6 +304,13 @@ const Header: React.FC<HeaderProps> = ({
               </div>
             )}
             
+            {/* Показываем детали если доступны */}
+            {realTimeStatus && realTimeStatus.details && (
+              <div className="progress-details">
+                <small>{realTimeStatus.details}</small>
+              </div>
+            )}
+            
             <div className="progress-info">
               <small>Это может занять несколько минут. Пожалуйста, не закрывайте страницу.</small>
             </div>

@@ -1273,18 +1273,26 @@ analysis_status = {
     "stage_name": "",
     "total_stages": 3,
     "start_time": None,
-    "is_running": False
+    "is_running": False,
+    "total_pages": 0,
+    "total_requirements": 0,
+    "processed_items": 0,
+    "details": ""
 }
 
-def update_analysis_status(stage_num: int, stage_name: str, progress: int):
+def update_analysis_status(stage_num: int, stage_name: str, progress: int, details: str = ""):
     """Обновляет глобальный статус анализа"""
     analysis_status.update({
         "current_stage": stage_num,
         "progress": progress,
         "stage_name": stage_name,
-        "is_running": True
+        "is_running": True,
+        "details": details
     })
-    logger.info(f"📊 Status updated: Stage {stage_num}/3 - {stage_name} - {progress}%")
+    log_msg = f"📊 Status updated: Stage {stage_num}/3 - {stage_name} - {progress}%"
+    if details:
+        log_msg += f" ({details})"
+    logger.info(log_msg)
 
 def reset_analysis_status():
     """Сбрасывает статус анализа"""
@@ -1293,8 +1301,43 @@ def reset_analysis_status():
         "progress": 0,
         "stage_name": "",
         "is_running": False,
-        "start_time": None
+        "start_time": None,
+        "total_pages": 0,
+        "total_requirements": 0,
+        "processed_items": 0,
+        "details": ""
     })
+
+def init_analysis_status(total_pages: int, total_requirements: int):
+    """Инициализирует статус анализа с общей информацией"""
+    analysis_status.update({
+        "total_pages": total_pages,
+        "total_requirements": total_requirements,
+        "start_time": None,
+        "processed_items": 0
+    })
+    logger.info(f"📊 Analysis initialized: {total_pages} pages, {total_requirements} requirements")
+
+def calculate_stage_progress(stage_num: int, processed: int, total: int) -> int:
+    """
+    Рассчитывает прогресс по новой формуле:
+    Stage 1: 0-20% (по страницам)
+    Stage 2: 20-35% (по страницам)
+    Stage 3: 35-100% (по требованиям)
+    """
+    if stage_num == 1:
+        # Stage 1: 0-20%
+        stage_percent = (processed / total * 20) if total > 0 else 0
+        return min(int(stage_percent), 20)
+    elif stage_num == 2:
+        # Stage 2: 20-35% (15% диапазон)
+        stage_percent = 20 + (processed / total * 15) if total > 0 else 20
+        return min(int(stage_percent), 35)
+    elif stage_num == 3:
+        # Stage 3: 35-100% (65% диапазон)
+        stage_percent = 35 + (processed / total * 65) if total > 0 else 35
+        return min(int(stage_percent), 100)
+    return 0
 
 # After analysis_status definition
 extraction_status = {
@@ -1303,17 +1346,22 @@ extraction_status = {
     "stage_name": "",
     "total_stages": 2,
     "start_time": None,
-    "is_running": False
+    "is_running": False,
+    "details": ""  # Дополнительная информация о процессе
 }
 
-def update_extraction_status(stage_num: int, stage_name: str, progress: int):
+def update_extraction_status(stage_num: int, stage_name: str, progress: int, details: str = ""):
     extraction_status.update({
         "current_stage": stage_num,
         "progress": progress,
         "stage_name": stage_name,
-        "is_running": True
+        "is_running": True,
+        "details": details
     })
-    logger.info(f"📊 Extraction status updated: Stage {stage_num}/2 - {stage_name} - {progress}%")
+    log_msg = f"📊 Extraction status updated: Stage {stage_num}/2 - {stage_name} - {progress}%"
+    if details:
+        log_msg += f" ({details})"
+    logger.info(log_msg)
 
 def reset_extraction_status():
     extraction_status.update({
@@ -1398,7 +1446,7 @@ async def extract_requirements_endpoint(
         
         # Сбрасываем и инициализируем статус
         reset_extraction_status()
-        update_extraction_status(1, "Подготовка документа", 5)
+        update_extraction_status(1, "Подготовка документа", 5, f"Файл: {tz_document.filename}")
         
         logger.info(f"📋 [STEP 1] Извлечение требований из {tz_document.filename}")
         
@@ -1414,8 +1462,9 @@ async def extract_requirements_endpoint(
         await tz_document.seek(0)
         tz_content = await tz_document.read()
         
-        logger.info(f"📊 File size: {len(tz_content) / 1024:.1f} KB")
-        update_extraction_status(1, "Извлечение текста из документа", 20)
+        file_size_kb = len(tz_content) / 1024
+        logger.info(f"📊 File size: {file_size_kb:.1f} KB")
+        update_extraction_status(1, "Извлечение текста из документа", 20, f"Размер: {file_size_kb:.1f} KB")
         
         # Извлекаем текст из документа
         logger.info("📄 Extracting text from TZ document...")
@@ -1424,18 +1473,19 @@ async def extract_requirements_endpoint(
             raise HTTPException(status_code=499, detail="Client disconnected")
         
         tz_text = await extract_text_from_any(tz_content, tz_document.filename)
-        update_extraction_status(1, "Текст успешно извлечён", 50)
+        text_length = len(tz_text)
+        update_extraction_status(1, "Текст успешно извлечён", 50, f"Извлечено {text_length:,} символов")
         
         # Сегментируем требования
         logger.info("✂️ Segmenting requirements...")
-        update_extraction_status(2, "Сегментация требований", 60)
+        update_extraction_status(2, "Сегментация требований через AI", 60, "Анализ структуры документа...")
         
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected during segmentation")
             raise HTTPException(status_code=499, detail="Client disconnected")
         
         requirements = await segment_requirements(tz_text)
-        update_extraction_status(2, "Сегментация завершена", 90)
+        update_extraction_status(2, "Сегментация завершена", 90, f"Найдено {len(requirements)} требований")
         
         if not requirements:
             raise HTTPException(status_code=400, detail="No requirements extracted from TZ")
@@ -1445,7 +1495,7 @@ async def extract_requirements_endpoint(
             req['selected'] = True
         
         logger.info(f"✅ Successfully extracted {len(requirements)} requirements")
-        update_extraction_status(2, f"Извлечено {len(requirements)} требований", 100)
+        update_extraction_status(2, f"Извлечение завершено", 100, f"✅ Извлечено {len(requirements)} требований")
         
         return {
             "success": True,
@@ -1493,11 +1543,14 @@ async def analyze_documentation(
         try:
             requirements = json.loads(requirements_json)
             logger.info(f"📋 Получено {len(requirements)} требований из шага 1")
-            update_analysis_status(1, "Подготовка данных", 5)
             
             # Фильтруем только выбранные требования (selected=true)
             selected_requirements = [req for req in requirements if req.get('selected', True)]
             logger.info(f"✅ Выбрано {len(selected_requirements)} требований для анализа")
+            
+            # Инициализируем статус (total_pages обновим позже после открытия PDF)
+            init_analysis_status(0, len(selected_requirements))
+            update_analysis_status(1, "Подготовка данных", 0, f"Выбрано {len(selected_requirements)} требований")
             
             if not selected_requirements:
                 raise HTTPException(status_code=400, detail="No requirements selected for analysis")
@@ -1526,12 +1579,19 @@ async def analyze_documentation(
 
         logger.info(f"📊 File size - DOC: {len(doc_content) / 1024:.1f} KB")
 
+        # Обновляем total_pages в статусе после открытия PDF
+        with PDFProcessor(doc_content, doc_document.filename) as processor:
+            total_pages = processor.page_count
+            analysis_status["total_pages"] = total_pages
+            logger.info(f"📄 Документ содержит {total_pages} страниц")
+
         # ============================================================
         # ЭТАП 3 [STAGE 1]: Извлечение метаданных страниц
         # ============================================================
 
         logger.info("📋 [STEP 1/3] STAGE 1: Extracting page metadata...")
-        pages_metadata = await extract_page_metadata(doc_content, doc_document.filename, max_pages=150)
+        pages_to_process_stage1 = min(total_pages, STAGE1_MAX_PAGES)
+        pages_metadata = await extract_page_metadata(doc_content, doc_document.filename, max_pages=STAGE1_MAX_PAGES)
 
         # 🔧 КРИТИЧЕСКИ ВАЖНО: Нормализуем номера листов к ТОЛЬКО ЦИФРОВОМУ формату
         logger.info("📋 [STAGE 1] Нормализация номеров листов к цифровому формату...")
@@ -1544,7 +1604,10 @@ async def analyze_documentation(
                     logger.info(f"📋 Нормализовано: стр.{page_meta.get('page')} '{original_sheet_num}' → '{normalized_sheet_num}'")
 
         logger.info(f"✅ [STAGE 1] Нормализация завершена. Все номера листов теперь в цифровом формате.")
-        update_analysis_status(1, "Извлечение метаданных", 33)
+        
+        # Обновляем прогресс Stage 1 (0-20%)
+        progress = calculate_stage_progress(1, len(pages_metadata), pages_to_process_stage1)
+        update_analysis_status(1, "Извлечение метаданных завершено", progress, f"Обработано {len(pages_metadata)} страниц")
 
         # Создаем mapping: sheet_number → pdf_page_number для навигации
         sheet_to_pdf_mapping = {}
@@ -1599,14 +1662,20 @@ async def analyze_documentation(
         # ============================================================
 
         logger.info("📤 [STEP 2/3] STAGE 2: Converting to low-res and assessing relevance...")
-        update_analysis_status(2, "Префильтр страниц по тексту", 40)
+        
+        # Обновляем прогресс Stage 2 начало (20%)
+        progress = calculate_stage_progress(2, 0, total_pages)
+        update_analysis_status(2, "Префильтр страниц по тексту", progress, f"Анализ {total_pages} страниц...")
 
         # Текстовый префильтр страниц
         page_texts_quick = _extract_page_texts_quick(doc_content, max_pages=STAGE2_MAX_PAGES)
         candidate_pages = _simple_candidate_pages(requirements, page_texts_quick, per_req=7, cap_total=30)
         logger.info(f"📄 [STAGE 2] Текстовый префильтр выбрал страницы: {candidate_pages[:10]}{'...' if len(candidate_pages) > 10 else ''}")
 
-        update_analysis_status(2, "Извлечение выбранных страниц", 50)
+        # Обновляем прогресс Stage 2 середина (20-35%)
+        pages_analyzed_stage2 = len(candidate_pages)
+        progress = calculate_stage_progress(2, pages_analyzed_stage2 // 2, pages_analyzed_stage2)
+        update_analysis_status(2, "Извлечение выбранных страниц", progress, f"Найдено {pages_analyzed_stage2} релевантных страниц")
 
         # Извлекаем только выбранные страницы в low-res
         doc_images_low, page_numbers_kept = await extract_selected_pdf_pages_as_images(
@@ -1614,10 +1683,14 @@ async def analyze_documentation(
             detail=STAGE2_DETAIL, dpi=STAGE2_DPI, quality=STAGE2_QUALITY
         )
 
-        update_analysis_status(2, "Оценка релевантности страниц", 60)
+        progress = calculate_stage_progress(2, pages_analyzed_stage2, pages_analyzed_stage2)
+        update_analysis_status(2, "Оценка релевантности страниц", progress, "Анализ через Vision API...")
 
         page_mapping = await assess_page_relevance(pages_metadata, doc_images_low, requirements, page_numbers=page_numbers_kept)
-        update_analysis_status(2, "Релевантность определена", 66)
+        
+        # Завершаем Stage 2 (должно быть 35%)
+        progress = calculate_stage_progress(2, pages_analyzed_stage2, pages_analyzed_stage2)
+        update_analysis_status(2, "Релевантность определена", progress, f"Проанализировано {pages_analyzed_stage2} страниц")
 
         # ============================================================
         # ЭТАП 5: Подготовка system prompt
@@ -1630,7 +1703,11 @@ async def analyze_documentation(
         # ============================================================
 
         logger.info(f"🔍 [STEP 3/3] STAGE 3: Analyzing with high-resolution images...")
-        update_analysis_status(3, "Детальный анализ требований", 70)
+        
+        # Начинаем Stage 3 (35%)
+        total_reqs = len(requirements)
+        progress = calculate_stage_progress(3, 0, total_reqs)
+        update_analysis_status(3, "Детальный анализ требований", progress, f"Начало анализа {total_reqs} требований")
         analyzed_reqs = []
 
         # Группируем требования по общим страницам для оптимизации
@@ -1659,12 +1736,14 @@ async def analyze_documentation(
                     summary=f"Анализ прерван: клиент отключился после обработки {len(analyzed_reqs)}/{len(requirements)} требований (группа {group_idx}/{total_groups})"
                 )
 
-            # Динамический прогресс: 70% + (0-25% в зависимости от группы)
-            progress = 70 + int((group_idx / total_groups) * 25)
+            # Динамический прогресс: 35-100% в зависимости от количества проанализированных требований
+            processed_reqs = len(analyzed_reqs)
+            progress = calculate_stage_progress(3, processed_reqs, total_reqs)
             update_analysis_status(
                 3, 
-                f"Анализ требований ({group_idx}/{total_groups} групп)", 
-                progress
+                f"Анализ требований", 
+                progress,
+                f"Проанализировано {processed_reqs}/{total_reqs} требований (группа {group_idx}/{total_groups})"
             )
 
             logger.info(f"📦 [STAGE 3] [{group_idx}/{total_groups}] Analyzing {len(reqs_group)} requirements on {len(pages_key)} pages")
@@ -1701,7 +1780,10 @@ async def analyze_documentation(
         # ============================================================
 
         logger.info("📝 [STEP 3/3] Generating summary...")
-        update_analysis_status(3, "Генерация отчета", 95)
+        
+        # Обновляем прогресс перед генерацией отчета (почти 100%)
+        progress = calculate_stage_progress(3, total_reqs, total_reqs)
+        update_analysis_status(3, "Генерация отчета", min(progress, 99), f"Все {total_reqs} требований проанализированы")
 
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected before summary")
@@ -1768,7 +1850,7 @@ async def analyze_documentation(
             sheet_to_pdf_mapping=sheet_to_pdf_mapping  # Новое поле для навигации
         )
 
-        update_analysis_status(3, "Анализ завершен", 100)
+        update_analysis_status(3, "Анализ завершен", 100, f"✅ Успешно проанализировано {len(analyzed_reqs)} требований")
         logger.info(f"✅ [STEP 2] Анализ завершен успешно. Проанализировано {len(analyzed_reqs)} требований.")
         return parsed_result
 
