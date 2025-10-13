@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api-service/analysis_api_hybrid.py ./analysis_api.py
 COPY api-service/config.py ./config.py
 COPY api-service/pdf_processor.py ./pdf_processor.py
+COPY api-service/progress_tracker.py ./progress_tracker.py
 
 # Копируем папку с промптами
 COPY prompts /prompts

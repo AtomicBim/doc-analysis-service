@@ -1295,6 +1295,34 @@ def reset_analysis_status():
         "start_time": None
     })
 
+# After analysis_status definition
+extraction_status = {
+    "current_stage": None,
+    "progress": 0,
+    "stage_name": "",
+    "total_stages": 2,
+    "start_time": None,
+    "is_running": False
+}
+
+def update_extraction_status(stage_num: int, stage_name: str, progress: int):
+    extraction_status.update({
+        "current_stage": stage_num,
+        "progress": progress,
+        "stage_name": stage_name,
+        "is_running": True
+    })
+    logger.info(f"📊 Extraction status updated: Stage {stage_num}/2 - {stage_name} - {progress}%")
+
+def reset_extraction_status():
+    extraction_status.update({
+        "current_stage": None,
+        "progress": 0,
+        "stage_name": "",
+        "is_running": False,
+        "start_time": None
+    })
+
 # ============================
 # FASTAPI ПРИЛОЖЕНИЕ
 # ============================
@@ -1335,6 +1363,10 @@ async def root():
 async def get_analysis_status():
     """Получить текущий статус анализа"""
     return analysis_status
+
+@app.get("/extraction_status")
+async def get_extraction_status():
+    return extraction_status
 
 
 @app.post("/extract_requirements")

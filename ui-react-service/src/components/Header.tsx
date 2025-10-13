@@ -43,16 +43,17 @@ const Header: React.FC<HeaderProps> = ({
 
   // Polling статуса анализа
   useEffect(() => {
-    if (loading && currentStep === 2) {
-      // Начинаем polling статуса каждые 2 секунды
-      statusPollingRef.current = setInterval(fetchAnalysisStatus, 2000);
+    if (loading) {
+      const endpoint = currentStep === 1 ? 'extraction_status' : 'status';
+      // Start polling
+      statusPollingRef.current = setInterval(() => fetchStatus(endpoint), 2000);
     } else {
-      // Останавливаем polling
+      // Stop polling
       if (statusPollingRef.current) {
         clearInterval(statusPollingRef.current);
         statusPollingRef.current = null;
       }
-      // Сбрасываем статус если анализ не запущен
+      // Reset status if not loading
       if (!loading) {
         setRealTimeStatus(null);
       }
@@ -65,19 +66,17 @@ const Header: React.FC<HeaderProps> = ({
     };
   }, [loading, currentStep]);
 
-  // Получение статуса анализа в реальном времени
-  const fetchAnalysisStatus = async () => {
+  // Rename fetchAnalysisStatus to fetchStatus and add endpoint param
+  const fetchStatus = async (endpoint: string) => {
     try {
-      const response = await axios.get(`${API_URL}/status`);
-      const status = response.data;
-      if (status.is_running) {
-        setRealTimeStatus(status);
-        setCurrentStage(status.stage_name);
-        setAnalysisProgress(status.progress);
-        console.log(`📊 Real-time status: Stage ${status.current_stage}/${status.total_stages} - ${status.stage_name} - ${status.progress}%`);
-      }
+      const response = await axios.get(`${API_URL}/${endpoint}`);
+      const data = response.data;
+      
+      setRealTimeStatus(data);
+      setAnalysisProgress(data.progress || 0);
+      setCurrentStage(data.stage_name || '');
     } catch (err) {
-      console.warn('Failed to fetch analysis status:', err);
+      console.error('Status fetch error:', err);
     }
   };
 
