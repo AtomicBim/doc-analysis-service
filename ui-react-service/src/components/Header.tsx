@@ -5,6 +5,8 @@ import { Requirement } from '../types';
 import { EditableRequirement } from './RequirementEditor';
 import FileUpload from './FileUpload';
 import StageSelector from './StageSelector';
+import { API_URL, TIMEOUTS, MESSAGES, STAGE_ICONS } from '../constants';
+import { formatApiError } from '../utils/errorFormatter';
 import './Header.css';
 
 interface HeaderProps {
@@ -16,17 +18,17 @@ interface HeaderProps {
   ) => void;
   onDocFileChange: (file: File | null) => void;
   confirmedRequirements: EditableRequirement[] | null;
-  analysisCompleted?: boolean; // Флаг завершения анализа
+  analysisCompleted?: boolean;
+  onReset?: () => void;
 }
-
-const API_URL = '/api';
 
 const Header: React.FC<HeaderProps> = ({ 
   onRequirementsExtracted,
   onAnalysisComplete, 
   onDocFileChange,
   confirmedRequirements,
-  analysisCompleted = false
+  analysisCompleted = false,
+  onReset
 }) => {
   const [stage, setStage] = useState('ФЭ');
   const [tzFile, setTzFile] = useState<File | null>(null);
@@ -41,34 +43,7 @@ const Header: React.FC<HeaderProps> = ({
   // Определяем текущий шаг: 1 - извлечение требований, 2 - анализ
   const currentStep = confirmedRequirements ? 2 : 1;
 
-  // Polling статуса анализа
-  useEffect(() => {
-    if (loading) {
-      const endpoint = currentStep === 1 ? 'extraction_status' : 'status';
-      // Start polling
-      statusPollingRef.current = setInterval(() => fetchStatus(endpoint), 2000);
-    } else {
-      // Stop polling
-      if (statusPollingRef.current) {
-        clearInterval(statusPollingRef.current);
-        statusPollingRef.current = null;
-      }
-      // Reset status if not loading
-      if (!loading) {
-        setRealTimeStatus(null);
-        setAnalysisProgress(0);
-        setCurrentStage('');
-      }
-    }
-
-    return () => {
-      if (statusPollingRef.current) {
-        clearInterval(statusPollingRef.current);
-      }
-    };
-  }, [loading, currentStep]);
-
-  // Rename fetchAnalysisStatus to fetchStatus and add endpoint param
+  // Функция для получения статуса
   const fetchStatus = async (endpoint: string) => {
     try {
       const response = await axios.get(`${API_URL}/${endpoint}`);
@@ -82,39 +57,56 @@ const Header: React.FC<HeaderProps> = ({
     }
   };
 
-  // Шаг 1: Извлечение требований из ТЗ
-  const handleExtractRequirements = async () => {
-    if (!tzFile) {
-      setError('Необходимо загрузить ТЗ.');
-      return;
+  // Polling статуса анализа
+  useEffect(() => {
+    if (loading) {
+      const endpoint = currentStep === 1 ? 'extraction_status' : 'status';
+      statusPollingRef.current = setInterval(() => fetchStatus(endpoint), TIMEOUTS.STATUS_POLLING);
+    } else {
+      if (statusPollingRef.current) {
+        clearInterval(statusPollingRef.current);
+        statusPollingRef.current = null;
+      }
+      setRealTimeStatus(null);
+      setAnalysisProgress(0);
+      setCurrentStage('');
     }
 
+    return () => {
+      if (statusPollingRef.current) {
+        clearInterval(statusPollingRef.current);
+      }
+    };
+  }, [loading, currentStep]);
+
+  // Общая функция для подготовки к запросу
+  const prepareForRequest = () => {
     setLoading(true);
     setError(null);
     setAnalysisProgress(0);
     setCurrentStage('');
+  };
 
+  // Шаг 1: Извлечение требований из ТЗ
+  const handleExtractRequirements = async () => {
+    if (!tzFile) {
+      setError(MESSAGES.ERROR.TZ_FILE_REQUIRED);
+      return;
+    }
+
+    prepareForRequest();
     const formData = new FormData();
     formData.append('tz_document', tzFile);
 
     try {
       const response = await axios.post(`${API_URL}/extract_requirements`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        timeout: 900000, // 15 minutes
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: TIMEOUTS.REQUIREMENTS_EXTRACTION,
       });
 
-      const { requirements } = response.data;
-      onRequirementsExtracted(requirements);
-    } catch (err: any) {
-      let errorMessage = 'Произошла ошибка при извлечении требований.';
-      if (axios.isAxiosError(err) && err.response) {
-        errorMessage = `Ошибка API: ${err.response.status} - ${err.response.data.detail || err.message}`;
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      setError(errorMessage);
+      onRequirementsExtracted(response.data.requirements);
+    } catch (err) {
+      setError(formatApiError(err, MESSAGES.ERROR.REQUIREMENTS_EXTRACTION));
       console.error(err);
     } finally {
       setLoading(false);
@@ -124,15 +116,11 @@ const Header: React.FC<HeaderProps> = ({
   // Шаг 2: Анализ проектной документации
   const handleAnalyzeProject = async () => {
     if (!docFile || !confirmedRequirements) {
-      setError('Необходимо загрузить проектную документацию и подтвердить требования.');
+      setError(MESSAGES.ERROR.DOC_FILE_REQUIRED);
       return;
     }
 
-    setLoading(true);
-    setError(null);
-    setAnalysisProgress(0);
-    setCurrentStage('');
-
+    prepareForRequest();
     const formData = new FormData();
     formData.append('stage', stage);
     formData.append('requirements_json', JSON.stringify(confirmedRequirements));
@@ -140,39 +128,23 @@ const Header: React.FC<HeaderProps> = ({
 
     try {
       const response = await axios.post(`${API_URL}/analyze`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        timeout: 2400000, // 40 minutes
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: TIMEOUTS.PROJECT_ANALYSIS,
       });
 
       const { requirements, summary, sheet_to_pdf_mapping } = response.data;
       console.log('📄 Получены данные анализа:', { requirements: requirements.length, mapping: sheet_to_pdf_mapping });
       onAnalysisComplete(requirements, summary, sheet_to_pdf_mapping);
-    } catch (err: any) {
-      let errorMessage = 'Произошла ошибка при анализе.';
-      if (axios.isAxiosError(err) && err.response) {
-        errorMessage = `Ошибка API: ${err.response.status} - ${err.response.data.detail || err.message}`;
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      setError(errorMessage);
+    } catch (err) {
+      setError(formatApiError(err, MESSAGES.ERROR.PROJECT_ANALYSIS));
       console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleFileChange = (setter: React.Dispatch<React.SetStateAction<File | null>>, isDocFile: boolean = false) => 
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files && e.target.files.length > 0) {
-        const file = e.target.files[0];
-        setter(file);
-        if (isDocFile) {
-          onDocFileChange(file); // Показываем PDF сразу
-        }
-      }
-    };
+  // Показываем кнопку очистки если есть сохраненные данные
+  const hasStoredData = confirmedRequirements !== null || analysisCompleted;
 
   return (
     <header className="header">
@@ -185,6 +157,17 @@ const Header: React.FC<HeaderProps> = ({
               : `Шаг 2: Анализ проектной документации (${confirmedRequirements?.filter(r => r.selected).length} требований)`}
           </p>
         </div>
+        
+        {/* Кнопка очистки данных */}
+        {hasStoredData && onReset && !loading && (
+          <button 
+            className="btn-clear-data"
+            onClick={onReset}
+            title="Очистить все данные и начать заново"
+          >
+            🗑️ Очистить всё
+          </button>
+        )}
         
         {/* Индикатор шагов */}
         <div className="steps-indicator">
@@ -303,8 +286,7 @@ const Header: React.FC<HeaderProps> = ({
             {realTimeStatus && (
               <div className="progress-stage">
                 <span className="stage-icon">
-                  {realTimeStatus.current_stage === 1 ? '📋' :
-                   realTimeStatus.current_stage === 2 ? '🔍' : '📊'}
+                  {STAGE_ICONS[realTimeStatus.current_stage as keyof typeof STAGE_ICONS] || '📊'}
                 </span>
                 <span className="stage-text">
                   Этап {realTimeStatus.current_stage}/{realTimeStatus.total_stages}: {realTimeStatus.stage_name}

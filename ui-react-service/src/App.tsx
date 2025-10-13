@@ -1,94 +1,61 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import './App.css';
 import Header from './components/Header';
 import RequirementList from './components/RequirementList';
 import PdfViewer from './components/PdfViewer';
 import RequirementEditor, { EditableRequirement } from './components/RequirementEditor';
 import ResizablePanels from './components/ResizablePanels';
+import EmptyState from './components/EmptyState';
 import { Requirement } from './types';
+import { useLocalStorage } from './hooks/useLocalStorage';
+import { useNotification } from './hooks/useNotification';
+import { STORAGE_KEYS, MESSAGES, TIMEOUTS } from './constants';
+
+interface AppState {
+  currentStep: 1 | 2;
+  confirmedRequirements: EditableRequirement[] | null;
+  requirements: Requirement[];
+  summary: string;
+  sheetToPdfMapping: Record<string, number>;
+  analysisCompleted: boolean;
+}
+
+const initialAppState: AppState = {
+  currentStep: 1,
+  confirmedRequirements: null,
+  requirements: [],
+  summary: '',
+  sheetToPdfMapping: {},
+  analysisCompleted: false,
+};
 
 function App() {
-  // Состояние для двухшагового процесса
-  const [currentStep, setCurrentStep] = useState<1 | 2>(1);
-
-  // Шаг 1: Извлеченные требования для редактирования
+  // Локальное состояние (не сохраняется)
   const [extractedRequirements, setExtractedRequirements] = useState<EditableRequirement[] | null>(null);
   const [showRequirementEditor, setShowRequirementEditor] = useState(false);
-
-  // Шаг 2: Подтвержденные требования для анализа
-  const [confirmedRequirements, setConfirmedRequirements] = useState<EditableRequirement[] | null>(null);
-
-  // Результаты анализа
-  const [requirements, setRequirements] = useState<Requirement[]>([]);
-  const [summary, setSummary] = useState<string>('');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const [highlightText, setHighlightText] = useState<string>('');
   const [pageChangeKey, setPageChangeKey] = useState<number>(0);
-  const [analysisCompleted, setAnalysisCompleted] = useState(false);
 
-  // Mapping номеров листов на чертежах → порядковые номера страниц в PDF
-  const [sheetToPdfMapping, setSheetToPdfMapping] = useState<Record<string, number>>({});
+  // Система уведомлений
+  const { notification, showNotification, hideNotification } = useNotification();
 
-  // Ключ для localStorage
-  const STORAGE_KEY = 'doc-analysis-app-data';
-
-  // Состояние для уведомлений
-  const [notification, setNotification] = useState<string | null>(null);
-
-  // Восстановление данных из localStorage при загрузке
-  useEffect(() => {
-    try {
-      const savedData = localStorage.getItem(STORAGE_KEY);
-      if (savedData) {
-        const parsed = JSON.parse(savedData);
-        console.log('📦 Восстановлены данные из localStorage:', parsed);
-
-        // Восстанавливаем состояние
-        if (parsed.currentStep) setCurrentStep(parsed.currentStep);
-        if (parsed.confirmedRequirements) setConfirmedRequirements(parsed.confirmedRequirements);
-        if (parsed.requirements) setRequirements(parsed.requirements);
-        if (parsed.summary) setSummary(parsed.summary);
-        if (parsed.sheetToPdfMapping) setSheetToPdfMapping(parsed.sheetToPdfMapping);
-        if (parsed.analysisCompleted !== undefined) setAnalysisCompleted(parsed.analysisCompleted);
-
-        // Показываем уведомление о восстановлении
-        const hasResults = parsed.requirements && parsed.requirements.length > 0;
-        setNotification(
-          hasResults
-            ? `📦 Восстановлены результаты анализа (${parsed.requirements.length} требований). Загрузите PDF проекта для просмотра чертежей.`
-            : '📦 Восстановлено предыдущее состояние приложения'
-        );
-
-        // Скрываем уведомление через 5 секунд
-        setTimeout(() => setNotification(null), 5000);
-      }
-    } catch (error) {
-      console.warn('⚠️ Ошибка восстановления данных из localStorage:', error);
-      // Очищаем поврежденные данные
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  }, []);
-
-  // Сохранение данных в localStorage при изменении
-  useEffect(() => {
-    const dataToSave = {
-      currentStep,
-      confirmedRequirements,
-      requirements,
-      summary,
-      sheetToPdfMapping,
-      analysisCompleted,
-      // Не сохраняем: pdfFile (File объекты), extractedRequirements, showRequirementEditor, selectedPage, highlightText
-    };
-
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
-      console.log('💾 Данные сохранены в localStorage');
-    } catch (error) {
-      console.warn('⚠️ Ошибка сохранения данных в localStorage:', error);
-    }
-  }, [currentStep, confirmedRequirements, requirements, summary, sheetToPdfMapping, analysisCompleted]);
+  // Персистентное состояние в localStorage
+  const { storedValue: appState, setStoredValue: setAppState, clearStorage } = useLocalStorage<AppState>({
+    key: STORAGE_KEYS.APP_DATA,
+    initialValue: initialAppState,
+    onRestore: (data) => {
+      console.log('📦 Восстановлены данные из localStorage:', data);
+      const hasResults = data.requirements && data.requirements.length > 0;
+      showNotification(
+        hasResults
+          ? `📦 Восстановлены результаты анализа (${data.requirements.length} требований). Загрузите PDF проекта для просмотра чертежей.`
+          : '📦 Восстановлено предыдущее состояние приложения',
+        TIMEOUTS.NOTIFICATION_LONG
+      );
+    },
+  });
 
   // Шаг 1: Обработка извлеченных требований
   const handleRequirementsExtracted = (reqs: EditableRequirement[]) => {
@@ -98,9 +65,12 @@ function App() {
 
   // Подтверждение требований и переход к шагу 2
   const handleRequirementsConfirmed = (reqs: EditableRequirement[]) => {
-    setConfirmedRequirements(reqs);
+    setAppState({
+      ...appState,
+      confirmedRequirements: reqs,
+      currentStep: 2,
+    });
     setShowRequirementEditor(false);
-    setCurrentStep(2);
   };
 
   // Отмена редактирования
@@ -115,11 +85,15 @@ function App() {
     newSummary: string,
     mapping?: Record<string, number>
   ) => {
-    setRequirements(newRequirements);
-    setSummary(newSummary);
-    setAnalysisCompleted(true); // Устанавливаем флаг завершения анализа
+    setAppState({
+      ...appState,
+      requirements: newRequirements,
+      summary: newSummary,
+      analysisCompleted: true,
+      sheetToPdfMapping: mapping || appState.sheetToPdfMapping,
+    });
+    
     if (mapping) {
-      setSheetToPdfMapping(mapping);
       console.log('📊 Получен mapping листов:', mapping);
     }
   };
@@ -138,25 +112,25 @@ function App() {
 
   // Сброс к шагу 1 (начать заново)
   const handleReset = () => {
-    setCurrentStep(1);
+    if (!window.confirm(MESSAGES.CONFIRM.RESET)) return;
+
+    // Сбрасываем локальное состояние
     setExtractedRequirements(null);
-    setConfirmedRequirements(null);
-    setRequirements([]);
-    setSummary('');
     setPdfFile(null);
     setSelectedPage(null);
     setHighlightText('');
-    setSheetToPdfMapping({});
-    setAnalysisCompleted(false); // Сбрасываем флаг завершения анализа
 
-    // Очищаем localStorage
+    // Очищаем localStorage и персистентное состояние
     try {
-      localStorage.removeItem(STORAGE_KEY);
-      console.log('🗑️ Данные удалены из localStorage');
+      clearStorage();
+      showNotification(MESSAGES.SUCCESS.STORAGE_CLEANUP, TIMEOUTS.NOTIFICATION_SHORT);
     } catch (error) {
-      console.warn('⚠️ Ошибка очистки localStorage:', error);
+      console.error('⚠️ Ошибка очистки localStorage:', error);
+      showNotification(MESSAGES.ERROR.STORAGE_CLEANUP, TIMEOUTS.NOTIFICATION_SHORT);
     }
   };
+
+  const selectedRequirementsCount = appState.confirmedRequirements?.filter(r => r.selected).length || 0;
 
   // Компонент Header
   const headerContent = (
@@ -164,36 +138,33 @@ function App() {
       onRequirementsExtracted={handleRequirementsExtracted}
       onAnalysisComplete={handleAnalysisComplete}
       onDocFileChange={handleDocFileChange}
-      confirmedRequirements={confirmedRequirements}
-      analysisCompleted={analysisCompleted}
+      confirmedRequirements={appState.confirmedRequirements}
+      analysisCompleted={appState.analysisCompleted}
+      onReset={handleReset}
     />
   );
 
   // Левая панель (требования)
   const leftPanelContent = (
     <div className="panel-content">
-      {currentStep === 1 ? (
-        <div className="empty-state">
-          <div className="empty-icon">📋</div>
-          <p className="empty-text">Загрузите ТЗ для начала работы</p>
-          <p className="empty-hint">
-            Требования будут извлечены и показаны для редактирования
-          </p>
-        </div>
-      ) : requirements.length > 0 ? (
+      {appState.currentStep === 1 ? (
+        <EmptyState
+          icon="📋"
+          text="Загрузите ТЗ для начала работы"
+          hint="Требования будут извлечены и показаны для редактирования"
+        />
+      ) : appState.requirements.length > 0 ? (
         <RequirementList
-          requirements={requirements}
+          requirements={appState.requirements}
           onSelect={handleRequirementSelect}
-          sheetToPdfMapping={sheetToPdfMapping}
+          sheetToPdfMapping={appState.sheetToPdfMapping}
         />
       ) : (
-        <div className="empty-state">
-          <div className="empty-icon">📊</div>
-          <p className="empty-text">Загрузите проектную документацию</p>
-          <p className="empty-hint">
-            Проект будет проверен по {confirmedRequirements?.filter(r => r.selected).length} требованиям
-          </p>
-        </div>
+        <EmptyState
+          icon="📊"
+          text="Загрузите проектную документацию"
+          hint={`Проект будет проверен по ${selectedRequirementsCount} требованиям`}
+        />
       )}
     </div>
   );
@@ -201,17 +172,14 @@ function App() {
   // Правая панель (PDF + сводка)
   const rightPanelContent = (
     <div className="panel-content">
-      {requirements.length > 0 && !pdfFile ? (
-        <div className="empty-state pdf-missing-state">
-          <div className="empty-icon">📄</div>
-          <p className="empty-text">PDF файл проекта не загружен</p>
-          <p className="empty-hint">
-            Результаты анализа восстановлены из localStorage, но PDF файл необходимо загрузить повторно для просмотра чертежей.
-          </p>
-          <p className="empty-action">
-            ↑ Загрузите проектную документацию в верхней панели
-          </p>
-        </div>
+      {appState.requirements.length > 0 && !pdfFile ? (
+        <EmptyState
+          className="empty-state pdf-missing-state"
+          icon="📄"
+          text="PDF файл проекта не загружен"
+          hint="Результаты анализа восстановлены из localStorage, но PDF файл необходимо загрузить повторно для просмотра чертежей."
+          action="↑ Загрузите проектную документацию в верхней панели"
+        />
       ) : (
         <PdfViewer
           file={pdfFile}
@@ -220,10 +188,10 @@ function App() {
           key={pageChangeKey}
         />
       )}
-      {summary && (
+      {appState.summary && (
         <div className="summary-container">
           <h3>Общая сводка</h3>
-          <pre>{summary}</pre>
+          <pre>{appState.summary}</pre>
           <button className="btn-reset" onClick={handleReset}>
             🔄 Начать заново
           </button>
@@ -249,7 +217,7 @@ function App() {
         />
       )}
 
-      {/* Уведомление о восстановлении данных */}
+      {/* Уведомление */}
       {notification && (
         <div className="notification">
           <div className="notification-content">
@@ -257,7 +225,7 @@ function App() {
             <span className="notification-text">{notification}</span>
             <button
               className="notification-close"
-              onClick={() => setNotification(null)}
+              onClick={hideNotification}
               aria-label="Закрыть уведомление"
             >
               ✕
