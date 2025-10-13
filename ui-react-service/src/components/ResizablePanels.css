@@ -9,6 +9,7 @@
 .resizable-header {
   overflow-y: auto;
   flex-shrink: 0;
+  min-height: 40px; /* guard against collapse */
 }
 
 .resizable-content {
@@ -23,64 +24,62 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0; /* allow inner content to shrink without pushing layout */
+  min-height: 0;
 }
 
 /* Вертикальный разделитель (header <-> content) */
 .vertical-resizer {
-  height: 6px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  height: 6px; /* keep constant to avoid layout jump */
+  background: var(--color-border);
   cursor: ns-resize;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.2s ease;
+  transition: background-color 0.15s ease;
   z-index: 100;
 }
 
 .vertical-resizer:hover {
-  background: linear-gradient(135deg, #5568d3 0%, #65408b 100%);
-  height: 8px;
+  background: var(--color-border-strong);
 }
 
 .vertical-resizer:active {
-  background: #4c51bf;
-  height: 10px;
+  background: var(--color-accent);
 }
 
 /* Горизонтальный разделитель (left <-> right) */
 .horizontal-resizer {
-  width: 6px;
-  background: #e5e7eb;
+  width: 6px; /* keep constant to avoid layout jump */
+  background: var(--color-border);
   cursor: ew-resize;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: all 0.2s ease;
+  transition: background-color 0.15s ease;
   z-index: 100;
 }
 
 .horizontal-resizer:hover {
-  background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
-  width: 8px;
+  background: var(--color-border-strong);
 }
 
 .horizontal-resizer:active {
-  background: #4c51bf;
-  width: 10px;
+  background: var(--color-accent);
 }
 
 /* Иконки-индикаторы на разделителях */
 .resizer-handle {
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 1rem;
-  font-weight: bold;
+  color: #9ca3af;
+  font-size: 0.75rem;
+  font-weight: 600;
   pointer-events: none;
   user-select: none;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  text-shadow: none;
 }
 
 .vertical-resizer .resizer-handle {
@@ -103,5 +102,7 @@
 .resizable-right > * {
   height: 100%;
   width: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
