@@ -61,7 +61,7 @@ if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is required")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-MAX_FILE_SIZE_MB = 40
+MAX_FILE_SIZE_MB = 80
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 logger.info(f"🚀 Используется OpenAI API (VISION MODE): {OPENAI_MODEL}")
