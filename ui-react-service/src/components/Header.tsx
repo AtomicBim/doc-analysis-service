@@ -56,6 +56,8 @@ const Header: React.FC<HeaderProps> = ({
       // Reset status if not loading
       if (!loading) {
         setRealTimeStatus(null);
+        setAnalysisProgress(0);
+        setCurrentStage('');
       }
     }
 
@@ -92,32 +94,6 @@ const Header: React.FC<HeaderProps> = ({
     setAnalysisProgress(0);
     setCurrentStage('');
 
-    const stages = [
-      { name: 'Извлечение текста из ТЗ', duration: 15000, progress: 50 },
-      { name: 'Сегментация требований', duration: 10000, progress: 95 },
-    ];
-
-    let currentStageIndex = 0;
-    let elapsed = 0;
-    const tick = 500;
-    const progressInterval = setInterval(() => {
-      if (currentStageIndex < stages.length) {
-        const stage = stages[currentStageIndex];
-        elapsed += tick;
-        setCurrentStage(stage.name);
-        setAnalysisProgress((prev) => {
-          const target = stage.progress;
-          const step = Math.max(0.5, (target - prev) * 0.05);
-          const next = Math.min(prev + step, target);
-          return Math.min(next, 95);
-        });
-        if (elapsed >= stage.duration) {
-          currentStageIndex++;
-          elapsed = 0;
-        }
-      }
-    }, tick);
-
     const formData = new FormData();
     formData.append('tz_document', tzFile);
 
@@ -129,14 +105,9 @@ const Header: React.FC<HeaderProps> = ({
         timeout: 900000, // 15 minutes
       });
 
-      clearInterval(progressInterval);
-      setAnalysisProgress(100);
-      setCurrentStage('Завершено');
-
       const { requirements } = response.data;
       onRequirementsExtracted(requirements);
     } catch (err: any) {
-      clearInterval(progressInterval);
       let errorMessage = 'Произошла ошибка при извлечении требований.';
       if (axios.isAxiosError(err) && err.response) {
         errorMessage = `Ошибка API: ${err.response.status} - ${err.response.data.detail || err.message}`;
@@ -147,10 +118,6 @@ const Header: React.FC<HeaderProps> = ({
       console.error(err);
     } finally {
       setLoading(false);
-      setTimeout(() => {
-        setAnalysisProgress(0);
-        setCurrentStage('');
-      }, 2000);
     }
   };
 
@@ -166,38 +133,6 @@ const Header: React.FC<HeaderProps> = ({
     setAnalysisProgress(0);
     setCurrentStage('');
 
-    const stages = [
-      { name: 'Stage 1: Извлечение метаданных', duration: 20000, progress: 33 },
-      { name: 'Stage 2: Оценка релевантности', duration: 30000, progress: 66 },
-      { name: 'Stage 3: Детальный анализ и генерация отчета', duration: 240000, progress: 95 },
-    ];
-
-    let currentStageIndex = 0;
-    let elapsed = 0;
-    const tick = 500;
-    const progressInterval = setInterval(() => {
-      if (currentStageIndex < stages.length) {
-        const stage = stages[currentStageIndex];
-        elapsed += tick;
-        setCurrentStage(stage.name);
-
-        // Вычисляем прогресс для текущей стадии: от предыдущего процента до текущего
-        const prevProgress = currentStageIndex > 0 ? stages[currentStageIndex - 1].progress : 0;
-        const stageRange = stage.progress - prevProgress;
-        const stageElapsed = Math.min(elapsed / stage.duration, 1.0);
-        const currentProgress = prevProgress + (stageRange * stageElapsed);
-
-        setAnalysisProgress(Math.min(currentProgress, 95));
-
-        console.log(`📊 Stage ${currentStageIndex + 1}/${stages.length}: ${stage.name} - Progress: ${currentProgress.toFixed(1)}%`);
-
-        if (elapsed >= stage.duration) {
-          currentStageIndex++;
-          elapsed = 0;
-        }
-      }
-    }, tick);
-
     const formData = new FormData();
     formData.append('stage', stage);
     formData.append('requirements_json', JSON.stringify(confirmedRequirements));
@@ -211,15 +146,10 @@ const Header: React.FC<HeaderProps> = ({
         timeout: 2400000, // 40 minutes
       });
 
-      clearInterval(progressInterval);
-      setAnalysisProgress(100);
-      setCurrentStage('Завершено');
-
       const { requirements, summary, sheet_to_pdf_mapping } = response.data;
       console.log('📄 Получены данные анализа:', { requirements: requirements.length, mapping: sheet_to_pdf_mapping });
       onAnalysisComplete(requirements, summary, sheet_to_pdf_mapping);
     } catch (err: any) {
-      clearInterval(progressInterval);
       let errorMessage = 'Произошла ошибка при анализе.';
       if (axios.isAxiosError(err) && err.response) {
         errorMessage = `Ошибка API: ${err.response.status} - ${err.response.data.detail || err.message}`;
@@ -230,10 +160,6 @@ const Header: React.FC<HeaderProps> = ({
       console.error(err);
     } finally {
       setLoading(false);
-      setTimeout(() => {
-        setAnalysisProgress(0);
-        setCurrentStage('');
-      }, 2000);
     }
   };
 
