@@ -36,8 +36,8 @@ const Header: React.FC<HeaderProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState(0);
-  const [currentStage, setCurrentStage] = useState('');
   const [realTimeStatus, setRealTimeStatus] = useState<any>(null);
+  const [pollingErrors, setPollingErrors] = useState(0);
   const statusPollingRef = useRef<NodeJS.Timeout | null>(null);
 
   // Определяем текущий шаг: 1 - извлечение требований, 2 - анализ
@@ -51,9 +51,19 @@ const Header: React.FC<HeaderProps> = ({
       
       setRealTimeStatus(data);
       setAnalysisProgress(data.progress || 0);
-      setCurrentStage(data.stage_name || '');
+      setPollingErrors(0); // Сброс счётчика ошибок
     } catch (err) {
       console.error('Status fetch error:', err);
+      setPollingErrors(prev => prev + 1);
+      
+      // Останавливаем polling после 10 неудачных попыток (20 секунд)
+      if (pollingErrors >= 10) {
+        if (statusPollingRef.current) {
+          clearInterval(statusPollingRef.current);
+          statusPollingRef.current = null;
+        }
+        setError('Потеряно соединение с сервером. Пожалуйста, обновите страницу.');
+      }
     }
   };
 
@@ -69,7 +79,7 @@ const Header: React.FC<HeaderProps> = ({
       }
       setRealTimeStatus(null);
       setAnalysisProgress(0);
-      setCurrentStage('');
+      setPollingErrors(0);
     }
 
     return () => {
@@ -84,7 +94,7 @@ const Header: React.FC<HeaderProps> = ({
     setLoading(true);
     setError(null);
     setAnalysisProgress(0);
-    setCurrentStage('');
+    setPollingErrors(0);
   };
 
   // Шаг 1: Извлечение требований из ТЗ
@@ -282,8 +292,8 @@ const Header: React.FC<HeaderProps> = ({
               </div>
             </div>
 
-            {/* Показываем реальный статус если доступен */}
-            {realTimeStatus && (
+            {/* Показываем статус если доступен */}
+            {realTimeStatus && realTimeStatus.stage_name && (
               <div className="progress-stage">
                 <span className="stage-icon">
                   {STAGE_ICONS[realTimeStatus.current_stage as keyof typeof STAGE_ICONS] || '📊'}
@@ -291,13 +301,6 @@ const Header: React.FC<HeaderProps> = ({
                 <span className="stage-text">
                   Этап {realTimeStatus.current_stage}/{realTimeStatus.total_stages}: {realTimeStatus.stage_name}
                 </span>
-              </div>
-            )}
-            
-            {currentStage && (
-              <div className="progress-stage">
-                <span className="stage-icon">📊</span>
-                <span className="stage-text">{currentStage}</span>
               </div>
             )}
             

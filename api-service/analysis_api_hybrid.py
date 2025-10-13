@@ -1396,6 +1396,10 @@ async def extract_requirements_endpoint(
             logger.warning("⚠️ Client disconnected before extraction started.")
             raise HTTPException(status_code=499, detail="Client disconnected")
         
+        # Сбрасываем и инициализируем статус
+        reset_extraction_status()
+        update_extraction_status(1, "Подготовка документа", 5)
+        
         logger.info(f"📋 [STEP 1] Извлечение требований из {tz_document.filename}")
         
         # Проверка размера файла
@@ -1411,6 +1415,7 @@ async def extract_requirements_endpoint(
         tz_content = await tz_document.read()
         
         logger.info(f"📊 File size: {len(tz_content) / 1024:.1f} KB")
+        update_extraction_status(1, "Извлечение текста из документа", 20)
         
         # Извлекаем текст из документа
         logger.info("📄 Extracting text from TZ document...")
@@ -1419,14 +1424,18 @@ async def extract_requirements_endpoint(
             raise HTTPException(status_code=499, detail="Client disconnected")
         
         tz_text = await extract_text_from_any(tz_content, tz_document.filename)
+        update_extraction_status(1, "Текст успешно извлечён", 50)
         
         # Сегментируем требования
         logger.info("✂️ Segmenting requirements...")
+        update_extraction_status(2, "Сегментация требований", 60)
+        
         if await request.is_disconnected():
             logger.warning("⚠️ Client disconnected during segmentation")
             raise HTTPException(status_code=499, detail="Client disconnected")
         
         requirements = await segment_requirements(tz_text)
+        update_extraction_status(2, "Сегментация завершена", 90)
         
         if not requirements:
             raise HTTPException(status_code=400, detail="No requirements extracted from TZ")
@@ -1436,6 +1445,7 @@ async def extract_requirements_endpoint(
             req['selected'] = True
         
         logger.info(f"✅ Successfully extracted {len(requirements)} requirements")
+        update_extraction_status(2, f"Извлечено {len(requirements)} требований", 100)
         
         return {
             "success": True,
@@ -1589,14 +1599,14 @@ async def analyze_documentation(
         # ============================================================
 
         logger.info("📤 [STEP 2/3] STAGE 2: Converting to low-res and assessing relevance...")
-        update_analysis_status(2, "Оценка релевантности страниц", 40)
+        update_analysis_status(2, "Префильтр страниц по тексту", 40)
 
         # Текстовый префильтр страниц
         page_texts_quick = _extract_page_texts_quick(doc_content, max_pages=STAGE2_MAX_PAGES)
         candidate_pages = _simple_candidate_pages(requirements, page_texts_quick, per_req=7, cap_total=30)
         logger.info(f"📄 [STAGE 2] Текстовый префильтр выбрал страницы: {candidate_pages[:10]}{'...' if len(candidate_pages) > 10 else ''}")
 
-        update_analysis_status(2, "Оценка релевантности страниц", 50)
+        update_analysis_status(2, "Извлечение выбранных страниц", 50)
 
         # Извлекаем только выбранные страницы в low-res
         doc_images_low, page_numbers_kept = await extract_selected_pdf_pages_as_images(
@@ -1607,7 +1617,7 @@ async def analyze_documentation(
         update_analysis_status(2, "Оценка релевантности страниц", 60)
 
         page_mapping = await assess_page_relevance(pages_metadata, doc_images_low, requirements, page_numbers=page_numbers_kept)
-        update_analysis_status(2, "Оценка релевантности страниц", 66)
+        update_analysis_status(2, "Релевантность определена", 66)
 
         # ============================================================
         # ЭТАП 5: Подготовка system prompt
@@ -1636,19 +1646,28 @@ async def analyze_documentation(
             page_to_reqs[pages_key].append(req)
 
         logger.info(f"📦 [STAGE 3] Создано {len(page_to_reqs)} групп по общим страницам")
+        total_groups = len(page_to_reqs)
 
         for group_idx, (pages_key, reqs_group) in enumerate(page_to_reqs.items(), 1):
             if await request.is_disconnected():
-                logger.warning(f"⚠️ Client disconnected at group {group_idx}/{len(page_to_reqs)}")
+                logger.warning(f"⚠️ Client disconnected at group {group_idx}/{total_groups}")
                 # Возвращаем частичные результаты
                 return AnalysisResponse(
                     stage=stage,
                     req_type="ТЗ",
                     requirements=analyzed_reqs,
-                    summary=f"Анализ прерван: клиент отключился после обработки {len(analyzed_reqs)}/{len(requirements)} требований (группа {group_idx}/{len(page_to_reqs)})"
+                    summary=f"Анализ прерван: клиент отключился после обработки {len(analyzed_reqs)}/{len(requirements)} требований (группа {group_idx}/{total_groups})"
                 )
 
-            logger.info(f"📦 [STAGE 3] [{group_idx}/{len(page_to_reqs)}] Analyzing {len(reqs_group)} requirements on {len(pages_key)} pages")
+            # Динамический прогресс: 70% + (0-25% в зависимости от группы)
+            progress = 70 + int((group_idx / total_groups) * 25)
+            update_analysis_status(
+                3, 
+                f"Анализ требований ({group_idx}/{total_groups} групп)", 
+                progress
+            )
+
+            logger.info(f"📦 [STAGE 3] [{group_idx}/{total_groups}] Analyzing {len(reqs_group)} requirements on {len(pages_key)} pages")
 
             # Разбиваем на пакеты по N требований если группа большая
             for batch_start in range(0, len(reqs_group), STAGE3_BATCH_SIZE):
