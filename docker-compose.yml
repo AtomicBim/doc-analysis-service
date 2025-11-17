@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  doc-analysis-api:
+  # API-сервис с OpenAI API
     build:
       context: .
       dockerfile: ./api-service/Dockerfile
