@@ -1,5 +1,5 @@
 services:
-  # API-сервис с OpenAI API
+  doc-analysis-api:
     build:
       context: .
       dockerfile: ./api-service/Dockerfile
