@@ -45,7 +45,7 @@ STAGE1_BOTTOM_CENTER_CROP = {
 STAGE2_MAX_PAGES = 100  # Максимальное количество страниц для оценки релевантности
 STAGE2_DPI = 120  # Качество рендеринга (повышено для точности с дешевой моделью)
 STAGE2_QUALITY = 85  # JPEG качество (высокое, т.к. модель дешевая)
-STAGE2_DETAIL = "high"  # OpenAI Vision detail level (765 tokens/image, но модель дешевая)
+STAGE2_DETAIL = "high"  # OpenRouter/Gemini Vision detail level (765 tokens/image, но модель дешевая)
 STAGE2_MAX_PAGES_PER_REQUEST = 30  # Максимум страниц в одном запросе (30 × 765 = 22,950 токенов, безопасно для context window)
 
 # ============================================================
@@ -53,21 +53,11 @@ STAGE2_MAX_PAGES_PER_REQUEST = 30  # Максимум страниц в одно
 # ============================================================
 STAGE3_DPI = 120  # Качество рендеринга (оптимальный баланс: скорость +10%, качество -2%)
 STAGE3_QUALITY = 85  # JPEG качество (повышено для точности, т.к. модель дешевая)
-STAGE3_DETAIL = "high"  # OpenAI Vision detail level (765 tokens/image)
+STAGE3_DETAIL = "high"  # OpenRouter/Gemini Vision detail level (765 tokens/image)
 STAGE3_BATCH_SIZE = 10  # Количество требований в одном batch (увеличено для дешевой модели - меньше запросов)
 STAGE3_MAX_COMPLETION_TOKENS = 8000  # Максимальное количество токенов в ответе (увеличено для больших батчей)
 STAGE3_RETRY_ON_REFUSAL = True  # Повторять запрос с батчами размером 1 при refusal
 STAGE3_MAX_PAGES_PER_REQUEST = 30  # Максимум страниц в одном запросе (30 × 765 = 22,950 токенов < 30,000 TPM)
-
-# ============================================================
-# STAGE 4: Поиск противоречий (опционально)
-# ============================================================
-STAGE4_ENABLED = True  # Включить/выключить Stage 4 (отключите для ускорения больших проектов)
-STAGE4_SAMPLE_PAGES_PER_SECTION = 5  # Страниц из каждого раздела для анализа
-STAGE4_DPI = 100  # Качество (среднее между Stage 2 и 3)
-STAGE4_QUALITY = 70  # JPEG качество
-STAGE4_DETAIL = "low"  # OpenAI Vision detail level (экономим токены)
-STAGE4_MAX_COMPLETION_TOKENS = 6000  # Больше токенов для подробного отчета о противоречиях
 
 # ============================================================
 # Retry и rate limiting
@@ -77,9 +67,11 @@ RETRY_WAIT_EXPONENTIAL_MULTIPLIER = 1  # Множитель для экспон�
 RETRY_WAIT_EXPONENTIAL_MAX = 20  # Максимальное время ожидания (увеличено для API rate limits)
 
 # ============================================================
-# OpenAI API настройки
+# OpenRouter API настройки
 # ============================================================
-OPENAI_MODEL = "gpt-5-mini"  # Модель для анализа (дешевле gpt-4o в ~15 раз)
+OPENROUTER_MODEL = "google/gemini-2.5-flash"  # Модель для анализа
+OPENROUTER_REFERER = "https://localhost"
+OPENROUTER_X_TITLE = "PDF Analyzer"
 
 
 # ============================================================

@@ -11,21 +11,16 @@ import warnings
 from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential
-from openai import RateLimitError
-
-# Отключаем warnings о deprecation
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="openai")
+from openai import RateLimitError, OpenAI
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 # Импорт нашего рефакторингового PDF процессора
 from pdf_processor import PDFProcessor, PDFBatchProcessor
-from progress_tracker import ProgressTracker
 from config import (
     # Stage 1
     STAGE1_MAX_PAGES, STAGE1_DPI, STAGE1_QUALITY, STAGE1_MAX_PAGES_PER_REQUEST,
@@ -34,12 +29,10 @@ from config import (
     STAGE2_MAX_PAGES, STAGE2_DPI, STAGE2_QUALITY, STAGE2_DETAIL, STAGE2_MAX_PAGES_PER_REQUEST,
     # Stage 3
     STAGE3_DPI, STAGE3_QUALITY, STAGE3_DETAIL, STAGE3_BATCH_SIZE, STAGE3_MAX_COMPLETION_TOKENS, STAGE3_RETRY_ON_REFUSAL, STAGE3_MAX_PAGES_PER_REQUEST,
-    # Stage 4
-    STAGE4_ENABLED, STAGE4_SAMPLE_PAGES_PER_SECTION, STAGE4_DPI, STAGE4_QUALITY, STAGE4_DETAIL, STAGE4_MAX_COMPLETION_TOKENS,
     # Retry
     RETRY_MAX_ATTEMPTS, RETRY_WAIT_EXPONENTIAL_MULTIPLIER, RETRY_WAIT_EXPONENTIAL_MAX,
-    # OpenAI
-    OPENAI_MODEL,
+    # OpenRouter
+    OPENROUTER_MODEL, OPENROUTER_REFERER, OPENROUTER_X_TITLE,
     # Logging
     LOG_LEVEL, LOG_RESPONSE_PREVIEW_LENGTH, LOG_FULL_RESPONSE_ON_ERROR
 )
@@ -54,17 +47,20 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
-# Инициализация OpenAI API
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    logger.error("OPENAI_API_KEY не установлен в переменных окружения!")
-    raise ValueError("OPENAI_API_KEY is required")
+# Инициализация OpenRouter API
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
+    logger.error("OPENROUTER_API_KEY не установлен в переменных окружения!")
+    raise ValueError("OPENROUTER_API_KEY is required")
 
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
 MAX_FILE_SIZE_MB = 80
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-logger.info(f"🚀 Используется OpenAI API (VISION MODE): {OPENAI_MODEL}")
+logger.info(f"🚀 Используется OpenRouter API (VISION MODE): {OPENROUTER_MODEL}")
 logger.info("📋 Архитектура: ТЗ/ТУ парсинг вручную + Чертежи через Vision API")
 
 
@@ -301,21 +297,12 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
         }]
 
         # Добавляем изображения батча
-        for item in batch_crops:
-            content.append({
-                "type": "text",
-                "text": f"\n--- Страница {item['page_number']} ---"
-            })
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{item['image']}",
-                    "detail": "low"
-                }
-            })
-
         response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
+            extra_headers={
+                "HTTP-Referer": OPENROUTER_REFERER,
+                "X-Title": OPENROUTER_X_TITLE,
+            },
+            model=OPENROUTER_MODEL,
             messages=[{"role": "user", "content": content}],
             response_format={"type": "json_object"},
             max_completion_tokens=4000
@@ -502,14 +489,17 @@ async def _analyze_relevance_batch(
             }
         })
 
-    try:
-        response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": content}],
-            response_format={"type": "json_object"},
-            max_completion_tokens=4000
-        )
-
+            try:
+            response = await client.chat.completions.create(
+                extra_headers={
+                    "HTTP-Referer": OPENROUTER_REFERER,
+                    "X-Title": OPENROUTER_X_TITLE,
+                },
+                model=OPENROUTER_MODEL,
+                messages=[{"role": "user", "content": content}],
+                response_format={"type": "json_object"},
+                max_completion_tokens=4000
+            )
         data = json.loads(response.choices[0].message.content)
         page_mapping_list = data.get('page_mapping', [])
 
@@ -574,122 +564,6 @@ def _simple_candidate_pages(requirements: List[Dict[str, Any]], page_texts: List
         # fallback: первые 20 страниц
         uniq = list(range(0, min(20, len(page_texts))))
     return [i + 1 for i in uniq[:cap_total]]  # 1-based
-
-
-@retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
-async def find_contradictions(
-    pages_metadata: List[Dict[str, Any]],
-    doc_content: bytes,
-    requirements: List[Dict[str, Any]],
-    analyzed_reqs: List['RequirementAnalysis']
-) -> str:
-    """
-    Stage 4: Поиск противоречий в проектной документации.
-    Анализирует ключевые страницы из разных разделов и ищет несоответствия.
-
-    Returns: текстовый отчет о найденных противоречиях
-    """
-    logger.info(f"🔍 [STAGE 4] Начало поиска противоречий в документации...")
-
-    # Группируем страницы по разделам
-    sections = {}
-    for page_meta in pages_metadata:
-        section = page_meta.get('section', 'N/A')
-        if section not in sections:
-            sections[section] = []
-        sections[section].append(page_meta)
-
-    logger.info(f"📊 [STAGE 4] Найдено разделов: {list(sections.keys())}")
-
-    # Отбираем ключевые страницы из каждого раздела
-    selected_pages = []
-    for section, pages in sections.items():
-        # Берем первые N страниц из каждого раздела
-        sample = pages[:STAGE4_SAMPLE_PAGES_PER_SECTION]
-        selected_pages.extend([p['page'] for p in sample])
-        logger.info(f"📄 [STAGE 4] Раздел {section}: выбрано {len(sample)} страниц")
-
-    # Извлекаем выбранные страницы в среднем качестве
-    logger.info(f"📄 [STAGE 4] Извлечение {len(selected_pages)} ключевых страниц...")
-
-    # Используем новый PDFBatchProcessor для параллельного извлечения
-    processor = PDFBatchProcessor(doc_content, "contradictions_analysis.pdf")
-    image_bases = await processor.extract_pages_batch(selected_pages, STAGE4_DPI, STAGE4_QUALITY)
-
-    doc_images = []
-    for page_num, base64_image in zip(selected_pages, image_bases):
-        if base64_image:  # Только успешные извлечения
-            doc_images.append({'page': page_num, 'image': base64_image})
-
-    logger.info(f"✅ [STAGE 4] Извлечено {len(doc_images)} страниц")
-
-    # Формируем summary проанализированных требований
-    requirements_summary = "\n".join([
-        f"{r.number}. {r.requirement[:100]}... → {r.status} (уверенность: {r.confidence}%)"
-        for r in analyzed_reqs[:20]  # Первые 20 для экономии токенов
-    ])
-
-    # Используем загруженный промпт
-    prompt_text = STAGE_PROMPTS["stage4_contradictions"].format(
-        requirements_summary=requirements_summary,
-        sections=', '.join(sections.keys()),
-        page_count=len(doc_images)
-    )
-
-    # Формируем промпт для поиска противоречий
-    content = [{
-        "type": "text",
-        "text": prompt_text
-    }]
-
-    # Добавляем изображения
-    for img_data in doc_images:
-        content.append({
-            "type": "text",
-            "text": f"\n--- Страница {img_data['page']} ---"
-        })
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{img_data['image']}",
-                "detail": STAGE4_DETAIL
-            }
-        })
-
-    try:
-        response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": content}],
-            response_format={"type": "json_object"},
-            max_completion_tokens=STAGE4_MAX_COMPLETION_TOKENS
-        )
-
-        result = json.loads(response.choices[0].message.content)
-        contradictions = result.get('contradictions', [])
-        summary = result.get('summary', 'Анализ завершен')
-
-        logger.info(f"✅ [STAGE 4] Найдено противоречий: {len(contradictions)}")
-
-        # Формируем текстовый отчет
-        if not contradictions:
-            return "✅ ПРОТИВОРЕЧИЙ НЕ ОБНАРУЖЕНО\n\nПроектная документация не содержит явных противоречий между разделами."
-
-        report = f"🔍 ОТЧЕТ О ПРОТИВОРЕЧИЯХ\n\n{summary}\n\n"
-        report += "=" * 80 + "\n\n"
-
-        for idx, contr in enumerate(contradictions, 1):
-            severity_emoji = {"критично": "🔴", "средне": "🟡", "низко": "🟢"}.get(contr.get('severity', 'средне'), "⚪")
-            report += f"{idx}. {severity_emoji} {contr.get('type', 'Несоответствие').upper()}\n"
-            report += f"   Критичность: {contr.get('severity', 'средне')}\n"
-            report += f"   Описание: {contr.get('description', 'N/A')}\n"
-            report += f"   Страницы: {', '.join(map(str, contr.get('pages', [])))}\n"
-            report += f"   Рекомендация: {contr.get('recommendation', 'Требуется уточнение')}\n\n"
-
-        return report
-
-    except Exception as e:
-        logger.error(f"❌ [STAGE 4] Ошибка поиска противоречий: {e}")
-        return f"⚠️ ОШИБКА АНАЛИЗА ПРОТИВОРЕЧИЙ\n\nНе удалось выполнить анализ: {str(e)}"
 
 
 def normalize_status_confidence(analysis: Dict[str, Any]) -> Dict[str, Any]:
@@ -889,17 +763,20 @@ async def analyze_batch_with_high_detail(
             }
         })
 
-    try:
-        response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": content}
-            ],
-            response_format={"type": "json_object"},  # Принудительный JSON
-            max_completion_tokens=STAGE3_MAX_COMPLETION_TOKENS
-        )
-
+            try:
+            response = await client.chat.completions.create(
+                extra_headers={
+                    "HTTP-Referer": OPENROUTER_REFERER,
+                    "X-Title": OPENROUTER_X_TITLE,
+                },
+                model=OPENROUTER_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content}
+                ],
+                response_format={"type": "json_object"},  # Принудительный JSON
+                max_completion_tokens=STAGE3_MAX_COMPLETION_TOKENS
+            )
         response_text = response.choices[0].message.content
         refusal = response.choices[0].message.refusal
 
@@ -1124,7 +1001,11 @@ async def extract_text_from_pdf(content: bytes, filename: str) -> str:
             base64_image = images[0]
 
             response = await client.chat.completions.create(
-                model=OPENAI_MODEL,
+                extra_headers={
+                    "HTTP-Referer": OPENROUTER_REFERER,
+                    "X-Title": OPENROUTER_X_TITLE,
+                },
+                model=OPENROUTER_MODEL,
                 messages=[
                     {
                         "role": "user",
@@ -1203,7 +1084,11 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
 {tz_text[:10000]}"""  # Ограничиваем до 10000 символов
 
     response = await client.chat.completions.create(
-        model=OPENAI_MODEL,  # Используем модель из конфига
+        extra_headers={
+            "HTTP-Referer": OPENROUTER_REFERER,
+            "X-Title": OPENROUTER_X_TITLE,
+        },
+        model=OPENROUTER_MODEL,  # Используем модель из конфига
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
@@ -1402,8 +1287,8 @@ async def root():
         "status": "ok",
         "service": "Document Analysis API (VISION MODE)",
         "architecture": "Two-step: 1) Extract requirements from TZ, 2) Analyze project",
-        "provider": "openai",
-        "model": OPENAI_MODEL,
+        "provider": "openrouter",
+        "model": OPENROUTER_MODEL,
         "max_file_size_mb": MAX_FILE_SIZE_MB
     }
 
