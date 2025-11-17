@@ -64,7 +64,7 @@ class PDFProcessor:
             page_numbers: Список номеров страниц (1-based)
             dpi: Качество рендеринга
             quality: JPEG качество (0-100)
-            detail: OpenRouter/Gemini Vision detail level
+            detail: Vision detail level
 
         Returns:
             Список base64 строк изображений

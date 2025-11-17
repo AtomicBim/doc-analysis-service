@@ -45,7 +45,7 @@ STAGE1_BOTTOM_CENTER_CROP = {
 STAGE2_MAX_PAGES = 100  # Максимальное количество страниц для оценки релевантности
 STAGE2_DPI = 120  # Качество рендеринга (повышено для точности с дешевой моделью)
 STAGE2_QUALITY = 85  # JPEG качество (высокое, т.к. модель дешевая)
-STAGE2_DETAIL = "high"  # OpenRouter/Gemini Vision detail level (765 tokens/image, но модель дешевая)
+STAGE2_DETAIL = "high"  # Vision detail level (765 tokens/image, но модель дешевая)
 STAGE2_MAX_PAGES_PER_REQUEST = 30  # Максимум страниц в одном запросе (30 × 765 = 22,950 токенов, безопасно для context window)
 
 # ============================================================
@@ -53,7 +53,7 @@ STAGE2_MAX_PAGES_PER_REQUEST = 30  # Максимум страниц в одно
 # ============================================================
 STAGE3_DPI = 120  # Качество рендеринга (оптимальный баланс: скорость +10%, качество -2%)
 STAGE3_QUALITY = 85  # JPEG качество (повышено для точности, т.к. модель дешевая)
-STAGE3_DETAIL = "high"  # OpenRouter/Gemini Vision detail level (765 tokens/image)
+STAGE3_DETAIL = "high"  # Vision detail level (765 tokens/image)
 STAGE3_BATCH_SIZE = 10  # Количество требований в одном batch (увеличено для дешевой модели - меньше запросов)
 STAGE3_MAX_COMPLETION_TOKENS = 8000  # Максимальное количество токенов в ответе (увеличено для больших батчей)
 STAGE3_RETRY_ON_REFUSAL = True  # Повторять запрос с батчами размером 1 при refusal

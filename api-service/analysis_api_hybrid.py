@@ -1,7 +1,7 @@
 """
 FastAPI сервис для анализа документации с использованием гибридного подхода:
 - ТЗ/ТУ: ручной парсинг и сегментация требований
-- Чертежи: OpenAI Assistants API с File Search для анализа
+- Чертежи: OpenRouter OCR-решение на крупной LLM API с File Search для анализа
 """
 import os
 import json
@@ -74,7 +74,6 @@ def load_prompts() -> Dict[str, str]:
     prompts_dir = Path(__file__).parent.parent / "prompts"
 
     stage_files = {
-        "ГК": "gk_prompt.txt",
         "ФЭ": "fe_prompt.txt",
         "ЭП": "ep_prompt.txt"
     }
@@ -116,7 +115,6 @@ def load_stage_prompts() -> Dict[str, str]:
         "stage1_metadata": "stage1_metadata_extraction_prompt.txt",
         "stage2_relevance": "stage2_page_relevance_prompt.txt",
         "stage3_analysis": "stage3_detailed_analysis_prompt.txt",
-        "stage4_contradictions": "stage4_contradictions_prompt.txt",
         "system_prompt_template": "analysis_system_prompt_template.txt"
     }
     
@@ -1696,31 +1694,6 @@ async def analyze_documentation(
 - Требует уточнения: {unclear} ({unclear/total*100:.1f}%)
 
 Средняя достоверность: {sum(r.confidence for r in analyzed_reqs)/total:.1f}%"""
-
-        # ============================================================
-        # ЭТАП 8 (опционально): Поиск противоречий
-        # ============================================================
-
-        if STAGE4_ENABLED:
-            logger.info("🔍 STAGE 4: Поиск противоречий в документации...")
-            try:
-                contradictions_report = await find_contradictions(
-                    pages_metadata=pages_metadata,
-                    doc_content=doc_content,
-                    requirements=requirements,
-                    analyzed_reqs=analyzed_reqs
-                )
-
-                # Добавляем отчет о противоречиях к summary
-                summary += "\n\n" + "="*80 + "\n\n" + contradictions_report
-
-                logger.info("✅ [STAGE 4] Анализ противоречий завершен")
-
-            except Exception as e:
-                logger.error(f"❌ [STAGE 4] Ошибка при поиске противоречий: {e}")
-                summary += f"\n\n⚠️ Анализ противоречий не выполнен: {str(e)}"
-        else:
-            logger.info("⏭️ [STAGE 4] Пропущен (STAGE4_ENABLED=False)")
 
         # ============================================================
         # Возврат результата
