@@ -1,7 +1,7 @@
 """
 FastAPI сервис для анализа документации с использованием гибридного подхода:
 - ТЗ/ТУ: ручной парсинг и сегментация требований
-- Чертежи: OpenRouter OCR-решение на крупной LLM API с File Search для анализа
+- Чертежи: OpenRouter API с Gemini OCR для анализа
 """
 import os
 import json
@@ -295,6 +295,19 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
         }]
 
         # Добавляем изображения батча
+        for item in batch_crops:
+            content.append({
+                "type": "text",
+                "text": f"\n--- Страница {item['page_number']} ---"
+            })
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{item['image']}",
+                    "detail": "low"
+                }
+            })
+
         response = await client.chat.completions.create(
             extra_headers={
                 "HTTP-Referer": OPENROUTER_REFERER,
@@ -308,7 +321,7 @@ async def extract_page_metadata(doc_content: bytes, filename: str, max_pages: in
 
         response_text = response.choices[0].message.content
         if not response_text or not response_text.strip():
-            raise ValueError(f"Empty response from OpenAI for batch {batch_start}-{batch_end}")
+            raise ValueError(f"Empty response from OpenRouter for batch {batch_start}-{batch_end}")
 
         try:
             data = json.loads(response_text)
@@ -395,7 +408,7 @@ async def assess_page_relevance(
     Stage 2: Оценка релевантности страниц для каждого требования.
     Возвращает mapping: {requirement_number: [page_numbers]}
 
-    Оптимизировано для gpt-5-mini: всегда используем Vision API с high-res
+    Оптимизировано для Gemini: всегда используем Vision API с high-res
     """
     logger.info(f"🔍 [STAGE 2] Оценка релевантности {len(pages_metadata)} страниц для {len(requirements)} требований...")
 
@@ -472,7 +485,7 @@ async def _analyze_relevance_batch(
         "text": prompt_text
     }]
 
-    # Добавляем изображения в ВЫСОКОМ качестве (gpt-5-mini дешевая, не экономим)
+    # Добавляем изображения в ВЫСОКОМ качестве (Gemini Vision API)
     for idx, base64_image in enumerate(batch_images, 1):
         page_num = (page_numbers[idx - 1] if page_numbers and idx - 1 < len(page_numbers) else (offset + idx))
         content.append({
@@ -1074,7 +1087,7 @@ async def extract_text_from_any(content: bytes, filename: str) -> str:
 
 @retry(stop=stop_after_attempt(RETRY_MAX_ATTEMPTS), wait=wait_exponential(multiplier=RETRY_WAIT_EXPONENTIAL_MULTIPLIER, min=4, max=RETRY_WAIT_EXPONENTIAL_MAX))
 async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
-    """Сегментирует ТЗ на отдельные требования используя GPT."""
+    """Сегментирует ТЗ на отдельные требования используя OpenRouter/Gemini."""
     # Формируем промпт из загруженного шаблона + текст ТЗ
     prompt = f"""{REQUIREMENTS_EXTRACTION_PROMPT}
 
@@ -1093,7 +1106,7 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
 
     try:
         response_text = response.choices[0].message.content
-        logger.info(f"📄 GPT response preview: {response_text[:500]}...")
+        logger.info(f"📄 OpenRouter/Gemini response preview: {response_text[:500]}...")
         
         data = json.loads(response_text)
         logger.info(f"📊 Parsed JSON keys: {list(data.keys())}")
@@ -1101,7 +1114,7 @@ async def segment_requirements(tz_text: str) -> List[Dict[str, Any]]:
         requirements = data.get("requirements", [])
         
         if not requirements:
-            logger.warning(f"⚠️ Пустой список требований! Полный ответ GPT: {response_text}")
+            logger.warning(f"⚠️ Пустой список требований! Полный ответ OpenRouter/Gemini: {response_text}")
         
         logger.info(f"✅ Извлечено {len(requirements)} требований")
         return requirements
