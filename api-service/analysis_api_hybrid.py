@@ -487,17 +487,17 @@ async def _analyze_relevance_batch(
             }
         })
 
-            try:
-            response = await client.chat.completions.create(
-                extra_headers={
-                    "HTTP-Referer": OPENROUTER_REFERER,
-                    "X-Title": OPENROUTER_X_TITLE,
-                },
-                model=OPENROUTER_MODEL,
-                messages=[{"role": "user", "content": content}],
-                response_format={"type": "json_object"},
-                max_completion_tokens=4000
-            )
+    try:
+        response = await client.chat.completions.create(
+            extra_headers={
+                "HTTP-Referer": OPENROUTER_REFERER,
+                "X-Title": OPENROUTER_X_TITLE,
+            },
+            model=OPENROUTER_MODEL,
+            messages=[{"role": "user", "content": content}],
+            response_format={"type": "json_object"},
+            max_completion_tokens=4000
+        )
         data = json.loads(response.choices[0].message.content)
         page_mapping_list = data.get('page_mapping', [])
 
@@ -761,20 +761,20 @@ async def analyze_batch_with_high_detail(
             }
         })
 
-            try:
-            response = await client.chat.completions.create(
-                extra_headers={
-                    "HTTP-Referer": OPENROUTER_REFERER,
-                    "X-Title": OPENROUTER_X_TITLE,
-                },
-                model=OPENROUTER_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": content}
-                ],
-                response_format={"type": "json_object"},  # Принудительный JSON
-                max_completion_tokens=STAGE3_MAX_COMPLETION_TOKENS
-            )
+    try:
+        response = await client.chat.completions.create(
+            extra_headers={
+                "HTTP-Referer": OPENROUTER_REFERER,
+                "X-Title": OPENROUTER_X_TITLE,
+            },
+            model=OPENROUTER_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content}
+            ],
+            response_format={"type": "json_object"},  # Принудительный JSON
+            max_completion_tokens=STAGE3_MAX_COMPLETION_TOKENS
+        )
         response_text = response.choices[0].message.content
         refusal = response.choices[0].message.refusal
 
